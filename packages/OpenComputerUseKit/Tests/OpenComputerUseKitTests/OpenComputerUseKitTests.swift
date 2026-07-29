@@ -215,22 +215,24 @@ final class OpenComputerUseKitTests: XCTestCase {
 
     func testBoundedScreenshotPNGDataShrinksLargeScreenshots() throws {
         let image = try makeNoisyTestImage(width: 800, height: 600)
-        let data = try XCTUnwrap(boundedScreenshotPNGData(
+        let encoded = try encodeBoundedScreenshotPNG(
             for: image,
-            maxBytes: 50_000,
-            maxDimension: 320,
-            minScale: 0.05
-        ))
-        let size = try imageSize(in: data)
+            limits: ScreenshotEncodingLimits(maxBytes: 50_000, maxDimension: 320, maxEncodeAttempts: 6, scaleStep: 0.5)
+        )
+        let size = try imageSize(in: encoded.pngData)
 
-        XCTAssertLessThanOrEqual(data.count, 50_000)
+        XCTAssertLessThanOrEqual(encoded.pngData.count, 50_000)
         XCTAssertLessThanOrEqual(max(size.width, size.height), 320)
+        XCTAssertEqual(encoded.pixelSize, CGSize(width: size.width, height: size.height))
     }
 
     func testBoundedScreenshotPNGDataKeepsSmallScreenshotsAtOriginalSize() throws {
         let image = try makeSolidTestImage(width: 32, height: 24)
-        let data = try XCTUnwrap(boundedScreenshotPNGData(for: image, maxBytes: 1_000_000, maxDimension: 320))
-        let size = try imageSize(in: data)
+        let encoded = try encodeBoundedScreenshotPNG(
+            for: image,
+            limits: ScreenshotEncodingLimits(maxBytes: 1_000_000, maxDimension: 320)
+        )
+        let size = try imageSize(in: encoded.pngData)
 
         XCTAssertEqual(size.width, 32)
         XCTAssertEqual(size.height, 24)
@@ -297,9 +299,12 @@ final class OpenComputerUseKitTests: XCTestCase {
     }
 
     func testRunCallSequenceStopsAfterFirstToolError() throws {
+        // Schema-valid call that fails at execute time (stale state_id: the
+        // action fails before any app lookup or mutation); the sequence must
+        // stop before running the second call.
         let output = try runOpenComputerUseCall(
             .sequence(
-                callsJSON: #"[{"tool":"not_a_tool"},{"tool":"list_apps"}]"#,
+                callsJSON: #"[{"tool":"type_text","args":{"app":"no-such-app-contract-xyz","text":"hi","state_id":"1:2:stale"}},{"tool":"list_apps"}]"#,
                 callsFile: nil,
                 interCallDelay: openComputerUseDefaultInterCallDelay
             )
@@ -331,7 +336,7 @@ final class OpenComputerUseKitTests: XCTestCase {
     func testMacOSAppAgentProxyDecisionRoutesAutomationCommandsThroughAppBundle() {
         for command in [
             OpenComputerUseCLICommand.mcp,
-            .doctor,
+            .doctor(statusOnly: false, json: false),
             .listApps,
             .snapshot(app: "TextEdit"),
             .call(.single(toolName: "list_apps", argumentsJSON: nil, argumentsFile: nil)),
@@ -377,13 +382,13 @@ final class OpenComputerUseKitTests: XCTestCase {
 
     func testMacOSAppAgentProxyDecisionHonorsDisableAndMissingBundle() {
         XCTAssertFalse(shouldUseMacOSAppAgentProxy(
-            command: .doctor,
+            command: .doctor(statusOnly: false, json: false),
             proxyDisabled: true,
             appBundleAvailable: true,
             runningFromLaunchServicesAppInstance: false
         ))
         XCTAssertFalse(shouldUseMacOSAppAgentProxy(
-            command: .doctor,
+            command: .doctor(statusOnly: false, json: false),
             proxyDisabled: false,
             appBundleAvailable: false,
             runningFromLaunchServicesAppInstance: false
@@ -653,14 +658,25 @@ final class OpenComputerUseKitTests: XCTestCase {
         )
     }
 
-    func testDispatcherMissingArgumentsMatchOfficialToolText() {
+    func testDispatcherMissingArgumentsDistinguishSchemaAndEmptyText() {
         let dispatcher = ComputerUseToolDispatcher()
         let result = dispatcher.callToolAsResult(name: "type_text", arguments: ["app": "Sublime Text"])
         let emptyResult = dispatcher.callToolAsResult(name: "type_text", arguments: ["app": "Sublime Text", "text": ""])
 
+        // A missing required argument fails schema preflight as structured
+        // invalid_arguments before any app lookup happens.
         XCTAssertTrue(result.isError)
-        XCTAssertEqual(result.primaryText, "Missing required argument: text")
+        XCTAssertEqual(result.errorInfo?.code, "invalid_arguments")
+        XCTAssertEqual(result.errorInfo?.phase, .preflight)
+        XCTAssertEqual(
+            result.primaryText,
+            #"invalidArguments("missing required argument 'text' for tool 'type_text'")"#
+        )
+
+        // An empty string is schema-valid (the key is present) and keeps the
+        // official dispatcher message at execute time.
         XCTAssertTrue(emptyResult.isError)
+        XCTAssertEqual(emptyResult.errorInfo?.phase, .execute)
         XCTAssertEqual(emptyResult.primaryText, "Missing required argument: text")
     }
 
@@ -1337,6 +1353,13 @@ final class OpenComputerUseKitTests: XCTestCase {
         XCTAssertTrue(AppSafetyPolicy.isBlocked(bundleIdentifier: "com.1password.1password"))
         XCTAssertTrue(AppSafetyPolicy.isBlocked(bundleIdentifier: "com.bitwarden.desktop"))
         XCTAssertTrue(AppSafetyPolicy.isBlocked(bundleIdentifier: "me.proton.pass.electron"))
+        XCTAssertTrue(AppSafetyPolicy.isBlocked(bundleIdentifier: "com.apple.Passwords.MenuBarExtra"))
+    }
+
+    func testAppSafetyPolicyBlocksCaseVariantBundleIdentifiers() {
+        XCTAssertTrue(AppSafetyPolicy.isBlocked(bundleIdentifier: "COM.1PASSWORD.1PASSWORD"))
+        XCTAssertTrue(AppSafetyPolicy.isBlocked(bundleIdentifier: "Com.LastPass.LastPass"))
+        XCTAssertTrue(AppSafetyPolicy.isBlocked(bundleIdentifier: " com.bitwarden.desktop "))
     }
 
     func testVisualCursorEnvFlagDefaultsToEnabled() {

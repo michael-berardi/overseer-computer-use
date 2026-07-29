@@ -3,7 +3,7 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 
-enum MouseButtonKind: String {
+enum MouseButtonKind: String, CaseIterable {
     case left
     case right
     case middle
@@ -263,6 +263,7 @@ enum InputSimulation {
 
     private static func raiseAppWindowViaAccessibility(pid: pid_t) -> Bool {
         let appElement = AXUIElementCreateApplication(pid)
+        applyAccessibilityMessagingTimeout(to: appElement)
         guard let window = preferredWindow(for: appElement) else {
             return false
         }

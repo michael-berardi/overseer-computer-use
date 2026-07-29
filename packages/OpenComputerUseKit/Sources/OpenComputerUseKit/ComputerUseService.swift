@@ -1,7 +1,6 @@
 import AppKit
 import ApplicationServices
 import Foundation
-import ImageIO
 
 struct VisualCursorTarget: Equatable {
     let point: CGPoint
@@ -161,6 +160,69 @@ func makeVisualCursorTarget(
         targetWindowLayer: targetWindowLayer,
         screenMappings: screenMappings
     )
+}
+
+/// How the visual cursor wraps up after a tool action. Primary clicks end with a
+/// click pulse; every other visual action (secondary action, scroll, drag,
+/// set_value) settles back to the resting pose.
+enum VisualCursorCompletion: Equatable {
+    case pulse(clickCount: Int, mouseButton: MouseButtonKind)
+    case settle
+}
+
+/// Centralized trigger policy for the software cursor overlay. Every visual
+/// action (click, secondary action, scroll, drag, set_value) routes through
+/// these entry points so cursor semantics stay consistent: `begin` moves the
+/// cursor to the target before the action runs, `finish` plays the completion
+/// on success, and failures always settle instead of leaving the cursor
+/// mid-flight.
+enum VisualCursorTriggerPolicy {
+    static func begin(_ target: VisualCursorTarget?) {
+        guard let target else {
+            return
+        }
+
+        VisualCursorSupport.performOnMain {
+            SoftwareCursorOverlay.moveCursor(to: target.point, in: target.window)
+        }
+    }
+
+    static func finish(_ target: VisualCursorTarget?, completion: VisualCursorCompletion) {
+        guard let target else {
+            return
+        }
+
+        VisualCursorSupport.performOnMain {
+            switch completion {
+            case let .pulse(clickCount, mouseButton):
+                SoftwareCursorOverlay.pulseClick(
+                    at: target.point,
+                    clickCount: clickCount,
+                    mouseButton: mouseButton,
+                    in: target.window
+                )
+            case .settle:
+                SoftwareCursorOverlay.settle(at: target.point, in: target.window)
+            }
+        }
+    }
+
+    @discardableResult
+    static func run<T>(
+        target: VisualCursorTarget?,
+        completion: VisualCursorCompletion,
+        action: () throws -> T
+    ) throws -> T {
+        begin(target)
+        do {
+            let value = try action()
+            finish(target, completion: completion)
+            return value
+        } catch {
+            finish(target, completion: .settle)
+            throw error
+        }
+    }
 }
 
 func inputFallbackDebugEnabled(environment: [String: String]) -> Bool {
@@ -412,10 +474,169 @@ func shouldPreferContainingWebRowAXClickCandidate(
     return role == kAXStaticTextRole as String || role == kAXGroupRole as String || isSyntheticText
 }
 
-public final class ComputerUseService {
-    private var snapshotsByApp: [String: AppSnapshot] = [:]
+/// Bounds how long and how many snapshots the service keeps. The TTL keeps
+/// actions from silently operating on ancient state; the capacity keeps
+/// memory bounded regardless of how many apps are queried.
+public struct SnapshotCachePolicy: Equatable, Sendable {
+    public static let defaultTTL: TimeInterval = 15
+    public static let defaultCapacity = 16
+    public static let defaults = SnapshotCachePolicy()
 
-    public init() {}
+    public let ttl: TimeInterval
+    public let capacity: Int
+
+    public init(ttl: TimeInterval = defaultTTL, capacity: Int = defaultCapacity) {
+        precondition(ttl > 0, "ttl must be positive")
+        precondition(capacity > 0, "capacity must be positive")
+        self.ttl = ttl
+        self.capacity = capacity
+    }
+}
+
+/// Bounded TTL/LRU cache of app snapshots. Entries are keyed canonically by
+/// pid with query/name/bundle aliases; reads revalidate TTL, process
+/// liveness, and target-window existence before a snapshot is reused.
+final class SnapshotCache {
+    typealias Clock = () -> Date
+    typealias ProcessAliveCheck = (pid_t) -> Bool
+    typealias WindowExistenceCheck = (pid_t, CGWindowID) -> Bool
+
+    private struct Entry {
+        let snapshot: AppSnapshot
+        let storedAt: Date
+        let aliasKeys: Set<String>
+    }
+
+    private let policy: SnapshotCachePolicy
+    private let clock: Clock
+    private let isProcessAlive: ProcessAliveCheck
+    private let windowExists: WindowExistenceCheck
+
+    private var entriesByCanonicalKey: [String: Entry] = [:]
+    private var canonicalKeyByAlias: [String: String] = [:]
+    /// Oldest first; the back is the most recently used canonical key.
+    private var lruKeys: [String] = []
+
+    init(
+        policy: SnapshotCachePolicy = .defaults,
+        clock: @escaping Clock = { Date() },
+        isProcessAlive: @escaping ProcessAliveCheck = SnapshotCache.defaultIsProcessAlive,
+        windowExists: @escaping WindowExistenceCheck = SnapshotCache.defaultWindowExists
+    ) {
+        self.policy = policy
+        self.clock = clock
+        self.isProcessAlive = isProcessAlive
+        self.windowExists = windowExists
+    }
+
+    static func defaultIsProcessAlive(_ pid: pid_t) -> Bool {
+        NSRunningApplication(processIdentifier: pid)?.isTerminated == false
+    }
+
+    static func defaultWindowExists(_ pid: pid_t, _ windowID: CGWindowID) -> Bool {
+        guard let infoList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else {
+            return false
+        }
+
+        return infoList.contains { info in
+            (info[kCGWindowOwnerPID as String] as? pid_t) == pid
+                && (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value == windowID
+        }
+    }
+
+    /// Returns the cached snapshot for an alias key when it is still fresh
+    /// and its target process/window are intact; otherwise evicts it.
+    func snapshot(forKey key: String) -> AppSnapshot? {
+        guard let canonicalKey = canonicalKeyByAlias[key],
+              let entry = entriesByCanonicalKey[canonicalKey]
+        else {
+            return nil
+        }
+
+        guard isValid(entry) else {
+            evict(canonicalKey: canonicalKey)
+            return nil
+        }
+
+        promote(canonicalKey: canonicalKey)
+        return entry.snapshot
+    }
+
+    func store(_ snapshot: AppSnapshot, aliasKeys: Set<String>) {
+        let canonicalKey = Self.canonicalKey(for: snapshot)
+        evict(canonicalKey: canonicalKey)
+
+        let allAliases = aliasKeys.union([canonicalKey]).filter { !$0.isEmpty }
+        entriesByCanonicalKey[canonicalKey] = Entry(
+            snapshot: snapshot,
+            storedAt: clock(),
+            aliasKeys: allAliases
+        )
+        for alias in allAliases {
+            canonicalKeyByAlias[alias] = canonicalKey
+        }
+        lruKeys.append(canonicalKey)
+
+        while lruKeys.count > policy.capacity, let oldest = lruKeys.first {
+            evict(canonicalKey: oldest)
+        }
+    }
+
+    func removeAll() {
+        entriesByCanonicalKey.removeAll()
+        canonicalKeyByAlias.removeAll()
+        lruKeys.removeAll()
+    }
+
+    static func canonicalKey(for snapshot: AppSnapshot) -> String {
+        "pid:\(snapshot.app.pid)"
+    }
+
+    private func isValid(_ entry: Entry) -> Bool {
+        guard clock().timeIntervalSince(entry.storedAt) <= policy.ttl else {
+            return false
+        }
+
+        let pid = entry.snapshot.app.pid
+        guard isProcessAlive(pid) else {
+            return false
+        }
+
+        if let windowID = entry.snapshot.targetWindowID, !windowExists(pid, windowID) {
+            return false
+        }
+
+        return true
+    }
+
+    private func promote(canonicalKey: String) {
+        lruKeys.removeAll { $0 == canonicalKey }
+        lruKeys.append(canonicalKey)
+    }
+
+    private func evict(canonicalKey: String) {
+        guard let entry = entriesByCanonicalKey.removeValue(forKey: canonicalKey) else {
+            lruKeys.removeAll { $0 == canonicalKey }
+            return
+        }
+
+        for alias in entry.aliasKeys where canonicalKeyByAlias[alias] == canonicalKey {
+            canonicalKeyByAlias.removeValue(forKey: alias)
+        }
+        lruKeys.removeAll { $0 == canonicalKey }
+    }
+}
+
+public final class ComputerUseService {
+    private let snapshotCache: SnapshotCache
+
+    public convenience init() {
+        self.init(snapshotCache: SnapshotCache())
+    }
+
+    init(snapshotCache: SnapshotCache) {
+        self.snapshotCache = snapshotCache
+    }
 
     public func listApps() -> ToolCallResult {
         ToolCallResult.text(
@@ -428,9 +649,18 @@ public final class ComputerUseService {
     public func getAppState(
         app query: String,
         textLimit: SnapshotTextLimit = .defaults,
-        treeLimits: AccessibilityTreeLimits = .defaults
+        treeLimits: AccessibilityTreeLimits = .defaults,
+        includeScreenshot: Bool = true
     ) throws -> ToolCallResult {
-        snapshotResult(for: try refreshSnapshot(for: query, textLimit: textLimit, treeLimits: treeLimits), style: .fullState)
+        snapshotResult(
+            for: try refreshSnapshot(
+                for: query,
+                textLimit: textLimit,
+                treeLimits: treeLimits,
+                includeScreenshot: includeScreenshot
+            ),
+            style: .fullState
+        )
     }
 
     public func click(
@@ -440,7 +670,8 @@ public final class ComputerUseService {
         y: Double?,
         clickCount: Int,
         mouseButton: String,
-        clickMethod: ClickMethod = .auto
+        clickMethod: ClickMethod = .auto,
+        stateID: String? = nil
     ) throws -> ToolCallResult {
         try validateClickMethod(
             clickMethod,
@@ -453,8 +684,21 @@ public final class ComputerUseService {
             clickCount: clickCount
         )
 
-        let snapshot = try currentSnapshot(for: query)
-        let button = MouseButtonKind(rawValue: mouseButton.lowercased()) ?? .left
+        // Defense in depth: the dispatcher and schema validator reject these
+        // first, but direct service callers must never get a silent .left
+        // fallback or a clamped click count.
+        guard let button = MouseButtonKind(
+            rawValue: mouseButton.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        ) else {
+            throw ComputerUseError.invalidArguments(
+                "mouse_button must be one of \(MouseButtonKind.allCases.map(\.rawValue).joined(separator: ", "))"
+            )
+        }
+        guard clickCount > 0 else {
+            throw ComputerUseError.invalidArguments("click_count must be a positive integer")
+        }
+
+        let snapshot = try snapshotForAction(query: query, stateID: stateID)
         if snapshot.mode == .fixture {
             guard clickMethod == .auto else {
                 throw ComputerUseError.message(
@@ -469,19 +713,27 @@ public final class ComputerUseService {
                     throw ComputerUseError.invalidArguments("fixture click requires an identifier-backed element")
                 }
                 cursorTarget = visualCursorTarget(for: record, snapshot: snapshot)
-                moveVisualCursor(to: cursorTarget)
-                try FixtureBridge.post(FixtureCommand(kind: "click", identifier: identifier))
+                try VisualCursorTriggerPolicy.run(
+                    target: cursorTarget,
+                    completion: .pulse(clickCount: clickCount, mouseButton: button)
+                ) {
+                    try FixtureBridge.post(FixtureCommand(kind: "click", identifier: identifier))
+                    Thread.sleep(forTimeInterval: 0.15)
+                }
             } else if let x, let y {
                 let identifier = try fixtureIdentifier(at: CGPoint(x: x, y: y), snapshot: snapshot)
                 cursorTarget = fixtureVisualCursorTarget(identifier: identifier, snapshot: snapshot)
-                moveVisualCursor(to: cursorTarget)
-                try FixtureBridge.post(FixtureCommand(kind: "click", identifier: identifier, x: x, y: y))
+                try VisualCursorTriggerPolicy.run(
+                    target: cursorTarget,
+                    completion: .pulse(clickCount: clickCount, mouseButton: button)
+                ) {
+                    try FixtureBridge.post(FixtureCommand(kind: "click", identifier: identifier, x: x, y: y))
+                    Thread.sleep(forTimeInterval: 0.15)
+                }
             } else {
                 throw ComputerUseError.invalidArguments("click requires either element_index or x/y")
             }
 
-            Thread.sleep(forTimeInterval: 0.15)
-            pulseVisualCursor(at: cursorTarget, clickCount: clickCount, mouseButton: button)
             return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
         }
 
@@ -497,9 +749,10 @@ public final class ComputerUseService {
                 targetWindowLayer: snapshot.targetWindowLayer
             )
 
-            moveVisualCursor(to: cursorTarget)
-
-            do {
+            try VisualCursorTriggerPolicy.run(
+                target: cursorTarget,
+                completion: .pulse(clickCount: clickCount, mouseButton: button)
+            ) {
                 switch clickMethod {
                 case .auto:
                     if !(try performAXClickSequence(
@@ -542,12 +795,7 @@ public final class ComputerUseService {
                         snapshot: snapshot
                     )
                 }
-            } catch {
-                settleVisualCursor(at: cursorTarget)
-                throw error
             }
-
-            pulseVisualCursor(at: cursorTarget, clickCount: clickCount, mouseButton: button)
         } else if let x, let y {
             let screenshotPoint = CGPoint(x: x, y: y)
             let point = screenshotPixelToWindowPointInSnapshot(snapshot: snapshot, point: screenshotPoint)
@@ -558,9 +806,10 @@ public final class ComputerUseService {
                 targetWindowLayer: snapshot.targetWindowLayer
             )
 
-            moveVisualCursor(to: cursorTarget)
-
-            do {
+            try VisualCursorTriggerPolicy.run(
+                target: cursorTarget,
+                completion: .pulse(clickCount: clickCount, mouseButton: button)
+            ) {
                 switch clickMethod {
                 case .auto:
                     let candidates = try clickCandidates(at: point, in: snapshot)
@@ -601,12 +850,7 @@ public final class ComputerUseService {
                         snapshot: snapshot
                     )
                 }
-            } catch {
-                settleVisualCursor(at: cursorTarget)
-                throw error
             }
-
-            pulseVisualCursor(at: cursorTarget, clickCount: clickCount, mouseButton: button)
         } else {
             throw ComputerUseError.invalidArguments("click requires either element_index or x/y")
         }
@@ -620,8 +864,8 @@ public final class ComputerUseService {
         )
     }
 
-    public func performSecondaryAction(app query: String, elementIndex: String, action: String) throws -> ToolCallResult {
-        let snapshot = try currentSnapshot(for: query)
+    public func performSecondaryAction(app query: String, elementIndex: String, action: String, stateID: String? = nil) throws -> ToolCallResult {
+        let snapshot = try snapshotForAction(query: query, stateID: stateID)
         let record = try lookupElement(snapshot: snapshot, index: elementIndex)
 
         if snapshot.mode == .fixture {
@@ -640,16 +884,19 @@ public final class ComputerUseService {
             throw ComputerUseError.stateUnavailable("element \(elementIndex) has no backing accessibility object")
         }
 
-        let result = AXUIElementPerformAction(element, rawAction as CFString)
-        guard result == .success else {
-            throw ComputerUseError.message("AXUIElementPerformAction failed with \(result.rawValue)")
-        }
+        let cursorTarget = visualCursorTarget(for: record, snapshot: snapshot)
+        try VisualCursorTriggerPolicy.run(target: cursorTarget, completion: .settle) {
+            let result = AXUIElementPerformAction(element, rawAction as CFString)
+            guard result == .success else {
+                throw ComputerUseError.message("AXUIElementPerformAction failed with \(result.rawValue)")
+            }
 
-        Thread.sleep(forTimeInterval: 0.15)
+            Thread.sleep(forTimeInterval: 0.15)
+        }
         return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
     }
 
-    public func scroll(app query: String, direction: String, elementIndex: String, pages: Double) throws -> ToolCallResult {
+    public func scroll(app query: String, direction: String, elementIndex: String, pages: Double, stateID: String? = nil) throws -> ToolCallResult {
         let normalized = direction.lowercased()
         guard ["up", "down", "left", "right"].contains(normalized) else {
             throw ComputerUseError.message("Invalid scroll direction: \(direction)")
@@ -658,61 +905,101 @@ public final class ComputerUseService {
             throw ComputerUseError.message("pages must be > 0")
         }
 
-        let snapshot = try currentSnapshot(for: query)
+        let snapshot = try snapshotForAction(query: query, stateID: stateID)
         let record = try lookupElement(snapshot: snapshot, index: elementIndex)
 
         if snapshot.mode == .fixture {
             guard let identifier = record.identifier else {
                 throw ComputerUseError.invalidArguments("fixture scroll requires an identifier-backed element")
             }
-            try FixtureBridge.post(FixtureCommand(kind: "scroll", identifier: identifier, direction: normalized, pages: pages))
-            Thread.sleep(forTimeInterval: 0.15)
+            let cursorTarget = visualCursorTarget(for: record, snapshot: snapshot)
+            try VisualCursorTriggerPolicy.run(target: cursorTarget, completion: .settle) {
+                try FixtureBridge.post(FixtureCommand(kind: "scroll", identifier: identifier, direction: normalized, pages: pages))
+                Thread.sleep(forTimeInterval: 0.15)
+            }
             return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
         }
 
-        if let repeatCount = integralScrollPageCount(pages),
-           let rawAction = record.rawActions.first(where: { $0.caseInsensitiveCompare("AXScroll\(normalized.capitalized)ByPage") == .orderedSame }),
-           let element = record.element {
-            for _ in 0..<repeatCount {
-                _ = AXUIElementPerformAction(element, rawAction as CFString)
-                Thread.sleep(forTimeInterval: 0.05)
+        let cursorTarget = visualCursorTarget(for: record, snapshot: snapshot)
+        try VisualCursorTriggerPolicy.run(target: cursorTarget, completion: .settle) {
+            if let repeatCount = integralScrollPageCount(pages),
+               let rawAction = record.rawActions.first(where: { $0.caseInsensitiveCompare("AXScroll\(normalized.capitalized)ByPage") == .orderedSame }),
+               let element = record.element {
+                for _ in 0..<repeatCount {
+                    _ = AXUIElementPerformAction(element, rawAction as CFString)
+                    Thread.sleep(forTimeInterval: 0.05)
+                }
+            } else if let point = try globalPoint(for: record, snapshot: snapshot) {
+                try performScrollEvent(
+                    at: point,
+                    direction: normalized,
+                    pages: pages,
+                    targetDescription: "element_index=\(elementIndex)",
+                    snapshot: snapshot
+                )
+            } else {
+                throw ComputerUseError.stateUnavailable("element \(elementIndex) has no scrollable frame")
             }
-        } else if let point = try globalPoint(for: record, snapshot: snapshot) {
-            try performScrollEvent(
-                at: point,
-                direction: normalized,
-                pages: pages,
-                targetDescription: "element_index=\(elementIndex)",
-                snapshot: snapshot
-            )
-        } else {
-            throw ComputerUseError.stateUnavailable("element \(elementIndex) has no scrollable frame")
         }
 
         return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
     }
 
-    public func drag(app query: String, fromX: Double, fromY: Double, toX: Double, toY: Double) throws -> ToolCallResult {
-        let snapshot = try currentSnapshot(for: query)
+    public func drag(app query: String, fromX: Double, fromY: Double, toX: Double, toY: Double, stateID: String? = nil) throws -> ToolCallResult {
+        let snapshot = try snapshotForAction(query: query, stateID: stateID)
         if snapshot.mode == .fixture {
-            try FixtureBridge.post(FixtureCommand(kind: "drag", identifier: "fixture-drag-pad", x: fromX, y: fromY, toX: toX, toY: toY))
-            Thread.sleep(forTimeInterval: 0.15)
+            let startTarget = makeVisualCursorTarget(
+                at: CGPoint(x: fromX, y: fromY),
+                targetWindowID: snapshot.targetWindowID,
+                targetWindowLayer: snapshot.targetWindowLayer
+            )
+            let endTarget = makeVisualCursorTarget(
+                at: CGPoint(x: toX, y: toY),
+                targetWindowID: snapshot.targetWindowID,
+                targetWindowLayer: snapshot.targetWindowLayer
+            )
+            VisualCursorTriggerPolicy.begin(startTarget)
+            do {
+                try FixtureBridge.post(FixtureCommand(kind: "drag", identifier: "fixture-drag-pad", x: fromX, y: fromY, toX: toX, toY: toY))
+                Thread.sleep(forTimeInterval: 0.15)
+            } catch {
+                VisualCursorTriggerPolicy.finish(startTarget, completion: .settle)
+                throw error
+            }
+            VisualCursorTriggerPolicy.finish(endTarget, completion: .settle)
             return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
         }
 
         let start = try screenshotToGlobalPoint(snapshot: snapshot, x: fromX, y: fromY)
         let end = try screenshotToGlobalPoint(snapshot: snapshot, x: toX, y: toY)
-        try performDragEvent(
-            from: start,
-            to: end,
-            targetDescription: "from=(\(Int(fromX)), \(Int(fromY))) to=(\(Int(toX)), \(Int(toY)))",
-            snapshot: snapshot
+        let startTarget = makeVisualCursorTarget(
+            at: start,
+            targetWindowID: snapshot.targetWindowID,
+            targetWindowLayer: snapshot.targetWindowLayer
         )
+        let endTarget = makeVisualCursorTarget(
+            at: end,
+            targetWindowID: snapshot.targetWindowID,
+            targetWindowLayer: snapshot.targetWindowLayer
+        )
+        VisualCursorTriggerPolicy.begin(startTarget)
+        do {
+            try performDragEvent(
+                from: start,
+                to: end,
+                targetDescription: "from=(\(Int(fromX)), \(Int(fromY))) to=(\(Int(toX)), \(Int(toY)))",
+                snapshot: snapshot
+            )
+        } catch {
+            VisualCursorTriggerPolicy.finish(startTarget, completion: .settle)
+            throw error
+        }
+        VisualCursorTriggerPolicy.finish(endTarget, completion: .settle)
         return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
     }
 
-    public func typeText(app query: String, text: String) throws -> ToolCallResult {
-        let snapshot = try currentSnapshot(for: query)
+    public func typeText(app query: String, text: String, stateID: String? = nil) throws -> ToolCallResult {
+        let snapshot = try snapshotForAction(query: query, stateID: stateID)
         if snapshot.mode == .fixture {
             try FixtureBridge.post(FixtureCommand(kind: "type_text", identifier: "fixture-input", value: text))
             Thread.sleep(forTimeInterval: 0.15)
@@ -732,8 +1019,8 @@ public final class ComputerUseService {
         return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
     }
 
-    public func pressKey(app query: String, key: String) throws -> ToolCallResult {
-        let snapshot = try currentSnapshot(for: query)
+    public func pressKey(app query: String, key: String, stateID: String? = nil) throws -> ToolCallResult {
+        let snapshot = try snapshotForAction(query: query, stateID: stateID)
         if snapshot.mode == .fixture {
             try FixtureBridge.post(FixtureCommand(kind: "press_key", identifier: "fixture-key-capture", value: key))
             Thread.sleep(forTimeInterval: 0.15)
@@ -744,8 +1031,8 @@ public final class ComputerUseService {
         return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
     }
 
-    public func setValue(app query: String, elementIndex: String, value: String) throws -> ToolCallResult {
-        let snapshot = try currentSnapshot(for: query)
+    public func setValue(app query: String, elementIndex: String, value: String, stateID: String? = nil) throws -> ToolCallResult {
+        let snapshot = try snapshotForAction(query: query, stateID: stateID)
         let record = try lookupElement(snapshot: snapshot, index: elementIndex)
 
         if snapshot.mode == .fixture {
@@ -754,10 +1041,10 @@ public final class ComputerUseService {
             }
 
             let cursorTarget = visualCursorTarget(for: record, snapshot: snapshot)
-            moveVisualCursor(to: cursorTarget)
-            try FixtureBridge.post(FixtureCommand(kind: "set_value", identifier: identifier, value: value))
-            Thread.sleep(forTimeInterval: 0.15)
-            settleVisualCursor(at: cursorTarget)
+            try VisualCursorTriggerPolicy.run(target: cursorTarget, completion: .settle) {
+                try FixtureBridge.post(FixtureCommand(kind: "set_value", identifier: identifier, value: value))
+                Thread.sleep(forTimeInterval: 0.15)
+            }
             return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
         }
 
@@ -770,30 +1057,54 @@ public final class ComputerUseService {
         }
 
         let cursorTarget = visualCursorTarget(for: record, snapshot: snapshot)
-        moveVisualCursor(to: cursorTarget)
-
-        do {
+        try VisualCursorTriggerPolicy.run(target: cursorTarget, completion: .settle) {
             let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFString)
             guard result == .success else {
                 throw ComputerUseError.message("AXUIElementSetAttributeValue failed with \(result.rawValue)")
             }
 
             Thread.sleep(forTimeInterval: 0.1)
-        } catch {
-            settleVisualCursor(at: cursorTarget)
-            throw error
         }
-
-        settleVisualCursor(at: cursorTarget)
         return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
     }
 
     private func currentSnapshot(for query: String) throws -> AppSnapshot {
-        if let snapshot = snapshotsByApp[query.lowercased()] {
+        if let snapshot = snapshotCache.snapshot(forKey: query.lowercased()) {
             return snapshot
         }
 
         return try refreshSnapshot(for: query)
+    }
+
+    /// Resolves the snapshot an action should operate on. When the caller
+    /// supplies a `stateID`, the cached snapshot must match it exactly — a
+    /// stale identifier fails before any input is simulated.
+    private func snapshotForAction(query: String, stateID: String?) throws -> AppSnapshot {
+        if let stateID {
+            return try requireFreshState(stateID, for: query)
+        }
+
+        return try currentSnapshot(for: query)
+    }
+
+    /// Returns the fresh cached snapshot for `query` only when its
+    /// `stateID` matches; throws `ComputerUseError.staleState` on mismatch
+    /// and `ComputerUseError.stateUnavailable` when nothing fresh is cached.
+    @discardableResult
+    public func requireFreshState(_ stateID: String, for query: String) throws -> AppSnapshot {
+        guard let snapshot = snapshotCache.snapshot(forKey: query.lowercased()) else {
+            throw ComputerUseError.stateUnavailable(
+                "No fresh snapshot is cached for '\(query)'. Run get_app_state first."
+            )
+        }
+
+        guard snapshot.stateID == stateID else {
+            throw ComputerUseError.staleState(
+                "Snapshot state_id '\(stateID)' is stale for '\(query)'. Call get_app_state to refresh state_id."
+            )
+        }
+
+        return snapshot
     }
 
     @discardableResult
@@ -801,14 +1112,16 @@ public final class ComputerUseService {
         for query: String,
         textLimit: SnapshotTextLimit = .defaults,
         treeLimits: AccessibilityTreeLimits = .defaults,
-        recoveryPolicy: SnapshotRecoveryPolicy = .allowActivation
+        recoveryPolicy: SnapshotRecoveryPolicy = .allowActivation,
+        includeScreenshot: Bool = true
     ) throws -> AppSnapshot {
         let app = try AppDiscovery.resolve(query)
         let snapshot = try SnapshotBuilder.build(
             for: app,
             textLimit: textLimit,
             treeLimits: treeLimits,
-            recoveryPolicy: recoveryPolicy
+            recoveryPolicy: recoveryPolicy,
+            includeScreenshot: includeScreenshot
         )
 
         let keys = Set([
@@ -817,9 +1130,7 @@ public final class ComputerUseService {
             (app.bundleIdentifier ?? "").lowercased(),
         ].filter { !$0.isEmpty })
 
-        for key in keys {
-            snapshotsByApp[key] = snapshot
-        }
+        snapshotCache.store(snapshot, aliasKeys: keys)
 
         return snapshot
     }
@@ -1128,7 +1439,12 @@ public final class ComputerUseService {
 
     private func hitTestElement(at point: CGPoint, in snapshot: AppSnapshot) throws -> ElementRecord? {
         let appElement = AXUIElementCreateApplication(snapshot.app.pid)
-        let globalPoint = try screenshotToGlobalPoint(snapshot: snapshot, x: Double(point.x), y: Double(point.y))
+        applyAccessibilityMessagingTimeout(to: appElement)
+        // `point` is already window-relative (from snapshot element frames or
+        // clickActionPoints). Convert window -> global exactly once; routing
+        // through screenshotToGlobalPoint would re-apply the screenshot
+        // pixel-to-window scale and land off-target on Retina displays.
+        let globalPoint = try windowPointToGlobalPoint(snapshot: snapshot, point: point)
         var hitElement: AXUIElement?
         let result = AXUIElementCopyElementAtPosition(appElement, Float(globalPoint.x), Float(globalPoint.y), &hitElement)
         guard result == .success, let hitElement else {
@@ -1616,25 +1932,9 @@ public final class ComputerUseService {
     private func screenshotPixelToWindowPointInSnapshot(snapshot: AppSnapshot, point: CGPoint) -> CGPoint {
         screenshotPixelToWindowPoint(
             point,
-            screenshotPixelSize: screenshotPixelSize(snapshot: snapshot),
+            screenshotPixelSize: snapshot.screenshotPixelSize,
             windowBounds: snapshot.windowBounds
         )
-    }
-
-    private func screenshotPixelSize(snapshot: AppSnapshot) -> CGSize? {
-        guard
-            let screenshotPNGData = snapshot.screenshotPNGData,
-            let imageSource = CGImageSourceCreateWithData(screenshotPNGData as CFData, nil),
-            let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any],
-            let pixelWidth = properties[kCGImagePropertyPixelWidth] as? CGFloat,
-            let pixelHeight = properties[kCGImagePropertyPixelHeight] as? CGFloat,
-            pixelWidth > 0,
-            pixelHeight > 0
-        else {
-            return nil
-        }
-
-        return CGSize(width: pixelWidth, height: pixelHeight)
     }
 
     private func windowPointToGlobalPoint(snapshot: AppSnapshot, point: CGPoint) throws -> CGPoint {
@@ -1674,41 +1974,6 @@ public final class ComputerUseService {
     private func fixtureVisualCursorTarget(identifier: String, snapshot: AppSnapshot) -> VisualCursorTarget? {
         let record = snapshot.elements.values.first { $0.identifier == identifier }
         return record.flatMap { visualCursorTarget(for: $0, snapshot: snapshot) }
-    }
-
-    private func moveVisualCursor(to target: VisualCursorTarget?) {
-        guard let target else {
-            return
-        }
-
-        VisualCursorSupport.performOnMain {
-            SoftwareCursorOverlay.moveCursor(to: target.point, in: target.window)
-        }
-    }
-
-    private func settleVisualCursor(at target: VisualCursorTarget?) {
-        guard let target else {
-            return
-        }
-
-        VisualCursorSupport.performOnMain {
-            SoftwareCursorOverlay.settle(at: target.point, in: target.window)
-        }
-    }
-
-    private func pulseVisualCursor(at target: VisualCursorTarget?, clickCount: Int, mouseButton: MouseButtonKind) {
-        guard let target else {
-            return
-        }
-
-        VisualCursorSupport.performOnMain {
-            SoftwareCursorOverlay.pulseClick(
-                at: target.point,
-                clickCount: clickCount,
-                mouseButton: mouseButton,
-                in: target.window
-            )
-        }
     }
 
     private func debugInputFallback(tool: String, targetDescription: String, snapshot: AppSnapshot) {
@@ -1880,11 +2145,35 @@ public final class ComputerUseService {
         }
     }
 
-    private func snapshotResult(for snapshot: AppSnapshot, style: SnapshotTextStyle) -> ToolCallResult {
+    /// Internal (not private) so tests can pin the result shape: text item,
+    /// optional PNG item, and top-level state_id.
+    func snapshotResult(for snapshot: AppSnapshot, style: SnapshotTextStyle) -> ToolCallResult {
         var content = [ToolResultContentItem.text(snapshot.renderedText(style: style))]
         if let screenshotPNGData = snapshot.screenshotPNGData {
             content.append(.pngImage(screenshotPNGData))
         }
-        return ToolCallResult(content: content)
+        return ToolCallResult(content: content, stateID: snapshot.stateID.isEmpty ? nil : snapshot.stateID)
+    }
+
+    /// Non-disruptive inspection for the `inspect` CLI command: resolves only
+    /// running apps (never launches), builds the snapshot with the read-only
+    /// recovery policy (never activates), and does not touch the snapshot
+    /// cache used by actions.
+    public func inspectAppState(
+        app query: String,
+        windowTitleHint: String? = nil,
+        textLimit: SnapshotTextLimit = .defaults,
+        treeLimits: AccessibilityTreeLimits = .defaults
+    ) throws -> ToolCallResult {
+        let app = try AppDiscovery.resolveRunning(query)
+        let snapshot = try SnapshotBuilder.build(
+            for: app,
+            textLimit: textLimit,
+            treeLimits: treeLimits,
+            recoveryPolicy: .readOnly,
+            includeScreenshot: true,
+            windowTitleHint: windowTitleHint
+        )
+        return snapshotResult(for: snapshot, style: .fullState)
     }
 }

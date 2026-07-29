@@ -72,11 +72,46 @@ func visualCursorPostInteractionIdleTimeout() -> TimeInterval {
     30
 }
 
+let visualCursorMoveDurationEnvironmentKey = "OPEN_COMPUTER_USE_VISUAL_CURSOR_MOVE_DURATION"
+let defaultVisualCursorMoveDuration: TimeInterval = 0.18
+let maximumVisualCursorMoveDuration: TimeInterval = 2
+
+/// Wall-clock budget for a single visual cursor move. The overlay animation and
+/// the blocked caller both observe this bound, so input is never held longer
+/// than the configured duration. A value of 0 jumps straight to the target.
+func visualCursorMoveDuration(environment: [String: String]) -> TimeInterval {
+    guard
+        let rawValue = environment[visualCursorMoveDurationEnvironmentKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+        !rawValue.isEmpty
+    else {
+        return defaultVisualCursorMoveDuration
+    }
+
+    guard let parsed = Double(rawValue), parsed.isFinite else {
+        return defaultVisualCursorMoveDuration
+    }
+
+    return min(max(parsed, 0), maximumVisualCursorMoveDuration)
+}
+
+/// Idle sway refresh rate. Kept at or below 15 Hz; the previous 60 Hz timer
+/// burned CPU for a purely cosmetic animation.
+func visualCursorIdleUpdateInterval() -> TimeInterval {
+    1.0 / 12.0
+}
+
+/// Idle sway phase advance per second. Matches the visual speed of the old
+/// `0.05`-per-tick 60 Hz loop (0.05 * 60 = 3.0).
+func visualCursorIdlePhaseRate() -> CGFloat {
+    3
+}
+
 func visualCursorIdleRotationAmplitude() -> CGFloat {
     0.09
 }
 
-public struct VisualCursorObservationPoint: Codable, Sendable {
+public struct VisualCursorObservationPoint: Codable, Equatable, Sendable {
     public let x: Double
     public let y: Double
 
@@ -106,6 +141,22 @@ public struct VisualCursorObservationSnapshot: Codable, Sendable {
         self.rotation = rotation.map(Double.init)
         self.timestamp = timestamp
     }
+}
+
+/// Identity of an observation snapshot for change detection. The timestamp is
+/// deliberately excluded so unchanged frames are not rewritten to disk.
+struct VisualCursorObservationSignature: Equatable {
+    let phase: String
+    let tipPosition: VisualCursorObservationPoint?
+    let restingTipPosition: VisualCursorObservationPoint?
+    let rotation: Double?
+}
+
+func shouldWriteVisualCursorObservation(
+    last: VisualCursorObservationSignature?,
+    next: VisualCursorObservationSignature
+) -> Bool {
+    last != next
 }
 
 struct VisualCursorIdlePose {
@@ -197,6 +248,7 @@ enum SoftwareCursorOverlay {
     private static var hideTimer: Timer?
     private static var idlePhase: CGFloat = 0
     private static var observationPhase = "hidden"
+    private static var lastWrittenObservationSignature: VisualCursorObservationSignature?
 
     static func moveCursor(to targetPoint: CGPoint, in targetWindow: CursorTargetWindow?) {
         guard VisualCursorSupport.isEnabled, canPresentOverlay else {
@@ -278,6 +330,7 @@ enum SoftwareCursorOverlay {
         activeTargetWindow = nil
         visualDynamicsState = nil
         observationPhase = "hidden"
+        lastWrittenObservationSignature = nil
         writeObservationSnapshot(tipPosition: nil, rotation: nil)
         panel?.orderOut(nil)
     }
@@ -346,15 +399,25 @@ enum SoftwareCursorOverlay {
     }
 
     private static func animateMove(from start: CGPoint, to end: CGPoint, relativeTo targetWindow: CursorTargetWindow?) {
+        let moveDuration = visualCursorMoveDuration(environment: ProcessInfo.processInfo.environment)
+        guard moveDuration > 0 else {
+            placeCursor(
+                using: advanceVisualDynamics(
+                    toward: end,
+                    at: CACurrentMediaTime()
+                ),
+                clickProgress: 0
+            )
+            return
+        }
+
         let candidate = bestMotionCandidate(from: start, to: end, relativeTo: targetWindow)
         let path = candidate.path
-        // Use the recovered official progress spring timing instead of the older
-        // distance-compressed local duration, otherwise medium and long moves feel
-        // noticeably faster than the bundled app.
-        let duration = OfficialCursorMotionModel.calibratedTravelDuration(
-            distance: distanceBetween(start, end),
-            measurement: candidate.measurement
-        )
+        // The spring progress shape is preserved, but the wall-clock window is
+        // the configured move duration (default 180 ms) instead of the fixed
+        // recovered 343/240 s endpoint-lock time, so input is never blocked
+        // longer than configured.
+        let duration = CGFloat(moveDuration)
         let springTargetDuration = OfficialCursorMotionModel.closeEnoughTime
         let startTime = CACurrentMediaTime()
         var progress: CGFloat = 0
@@ -592,7 +655,8 @@ enum SoftwareCursorOverlay {
 
         observationPhase = "idle"
         idlePhase = 0
-        let timer = Timer(timeInterval: 1 / 60, repeats: true) { _ in
+        let updateInterval = visualCursorIdleUpdateInterval()
+        let timer = Timer(timeInterval: updateInterval, repeats: true) { _ in
             MainActor.assumeIsolated {
                 guard panel != nil, cursorView != nil else {
                     return
@@ -601,7 +665,7 @@ enum SoftwareCursorOverlay {
                 refreshActiveOrderingIfNeeded()
 
                 observationPhase = "idle"
-                idlePhase += 0.05
+                idlePhase += visualCursorIdlePhaseRate() * CGFloat(updateInterval)
                 let idlePose = visualCursorIdlePose(
                     restingTipPosition: restingTipPosition,
                     phase: idlePhase
@@ -672,6 +736,7 @@ enum SoftwareCursorOverlay {
                 activeTargetWindow = nil
                 visualDynamicsState = nil
                 observationPhase = "hidden"
+                lastWrittenObservationSignature = nil
                 writeObservationSnapshot(tipPosition: nil, rotation: nil)
             }
         }
@@ -760,6 +825,19 @@ enum SoftwareCursorOverlay {
             rotation: rotation,
             timestamp: CACurrentMediaTime()
         )
+
+        // Skip the disk write entirely when the visible state has not changed;
+        // per-frame writes of identical snapshots are pure IO overhead.
+        let signature = VisualCursorObservationSignature(
+            phase: snapshot.phase,
+            tipPosition: snapshot.tipPosition,
+            restingTipPosition: snapshot.restingTipPosition,
+            rotation: snapshot.rotation
+        )
+        guard shouldWriteVisualCursorObservation(last: lastWrittenObservationSignature, next: signature) else {
+            return
+        }
+        lastWrittenObservationSignature = signature
 
         do {
             let directory = url.deletingLastPathComponent()

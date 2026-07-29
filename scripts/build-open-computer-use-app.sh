@@ -243,13 +243,13 @@ icon_master_png="${repo_root}/assets/app-icons/open-computer-use-1024.png"
 iconset_build_script="${repo_root}/scripts/build-apple-iconset.sh"
 cursor_reference_source="${repo_root}/docs/references/codex-computer-use-reverse-engineering/assets/extracted-2026-04-19/official-software-cursor-window-252.png"
 
-bundle_display_name="Open Computer Use"
+bundle_display_name="OverSeer Computer Use"
 bundle_identifier="com.ifuryst.opencomputeruse"
 app_variant="release"
 app_bundle_name="${release_app_bundle_name}"
 
 if [[ "${configuration}" != "release" ]]; then
-  bundle_display_name="Open Computer Use (Dev)"
+  bundle_display_name="OverSeer Computer Use (Dev)"
   bundle_identifier="com.ifuryst.opencomputeruse.dev"
   app_variant="dev"
   app_bundle_name="${development_app_bundle_name}"

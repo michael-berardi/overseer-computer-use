@@ -5,15 +5,17 @@ func normalizedElementIndexArgument(_ value: Any?) -> String? {
         return string.isEmpty ? nil : string
     }
 
+    // CFBoolean NSNumbers (JSON true/false) bridge-cast to Int/Double, so the
+    // boolean check must run before any numeric branch.
+    if let number = value as? NSNumber, CFGetTypeID(number as CFTypeRef) == CFBooleanGetTypeID() {
+        return nil
+    }
+
     if let integer = value as? Int {
         return String(integer)
     }
 
     if let number = value as? NSNumber {
-        if CFGetTypeID(number as CFTypeRef) == CFBooleanGetTypeID() {
-            return nil
-        }
-
         return normalizedElementIndexNumber(number.doubleValue)
     }
 
@@ -44,6 +46,9 @@ public final class ComputerUseToolDispatcher {
     }
 
     public func callTool(name: String, arguments: [String: Any]) throws -> ToolCallResult {
+        try ToolSchemaValidator.validate(tool: name, arguments: arguments)
+        let stateID = optionalString("state_id", in: arguments)
+
         switch name {
         case "list_apps":
             return service.listApps()
@@ -54,30 +59,34 @@ public final class ComputerUseToolDispatcher {
                 treeLimits: AccessibilityTreeLimits.defaults.replacing(
                     maxNodeCount: try optionalPositiveInt("max_tree_nodes", in: arguments),
                     maxDepth: try optionalPositiveInt("max_tree_depth", in: arguments)
-                )
+                ),
+                includeScreenshot: try optionalBool("include_screenshot", in: arguments) ?? true
             )
         case "click":
             return try service.click(
                 app: requireString("app", in: arguments),
                 elementIndex: optionalElementIndex(in: arguments),
-                x: optionalDouble("x", in: arguments),
-                y: optionalDouble("y", in: arguments),
-                clickCount: Int(optionalDouble("click_count", in: arguments) ?? 1),
-                mouseButton: optionalString("mouse_button", in: arguments) ?? "left",
-                clickMethod: try parseClickMethod(optionalString("click_method", in: arguments))
+                x: try optionalDouble("x", in: arguments),
+                y: try optionalDouble("y", in: arguments),
+                clickCount: try optionalPositiveInt("click_count", in: arguments) ?? 1,
+                mouseButton: try optionalMouseButton(in: arguments) ?? MouseButtonKind.left.rawValue,
+                clickMethod: try parseClickMethod(optionalString("click_method", in: arguments)),
+                stateID: stateID
             )
         case "perform_secondary_action":
             return try service.performSecondaryAction(
                 app: requireString("app", in: arguments),
                 elementIndex: requireElementIndex(in: arguments),
-                action: requireString("action", in: arguments)
+                action: requireString("action", in: arguments),
+                stateID: stateID
             )
         case "scroll":
             return try service.scroll(
                 app: requireString("app", in: arguments),
                 direction: requireString("direction", in: arguments),
                 elementIndex: requireElementIndex(in: arguments),
-                pages: optionalDouble("pages", in: arguments) ?? 1
+                pages: try optionalDouble("pages", in: arguments) ?? 1,
+                stateID: stateID
             )
         case "drag":
             return try service.drag(
@@ -85,23 +94,27 @@ public final class ComputerUseToolDispatcher {
                 fromX: requireDouble("from_x", in: arguments),
                 fromY: requireDouble("from_y", in: arguments),
                 toX: requireDouble("to_x", in: arguments),
-                toY: requireDouble("to_y", in: arguments)
+                toY: requireDouble("to_y", in: arguments),
+                stateID: stateID
             )
         case "type_text":
             return try service.typeText(
                 app: requireString("app", in: arguments),
-                text: requireString("text", in: arguments)
+                text: requireString("text", in: arguments),
+                stateID: stateID
             )
         case "press_key":
             return try service.pressKey(
                 app: requireString("app", in: arguments),
-                key: requireString("key", in: arguments)
+                key: requireString("key", in: arguments),
+                stateID: stateID
             )
         case "set_value":
             return try service.setValue(
                 app: requireString("app", in: arguments),
                 elementIndex: requireElementIndex(in: arguments),
-                value: requireString("value", in: arguments)
+                value: requireString("value", in: arguments),
+                stateID: stateID
             )
         default:
             throw ComputerUseError.unsupportedTool(name)
@@ -109,16 +122,22 @@ public final class ComputerUseToolDispatcher {
     }
 
     public func callToolAsResult(name: String, arguments: [String: Any]) -> ToolCallResult {
+        callToolAsResult(name: name, arguments: arguments, callIndex: nil)
+    }
+
+    func callToolAsResult(name: String, arguments: [String: Any], callIndex: Int?) -> ToolCallResult {
+        do {
+            try ToolSchemaValidator.validate(tool: name, arguments: arguments)
+        } catch {
+            let info = computerUseErrorInfo(for: error, phase: .preflight, callIndex: callIndex)
+            return ToolCallResult.text(info.message, errorInfo: info)
+        }
+
         do {
             return try callTool(name: name, arguments: arguments)
-        } catch let error as ComputerUseError {
-            return ToolCallResult.text(
-                error.errorDescription ?? String(describing: error),
-                isError: error.toolResultIsError
-            )
         } catch {
-            let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
-            return ToolCallResult.text(message, isError: true)
+            let info = computerUseErrorInfo(for: error, phase: .execute, callIndex: callIndex)
+            return ToolCallResult.text(info.message, errorInfo: info)
         }
     }
 
@@ -132,6 +151,22 @@ public final class ComputerUseToolDispatcher {
 
     private func optionalString(_ key: String, in arguments: [String: Any]) -> String? {
         arguments[key] as? String
+    }
+
+    private func optionalBool(_ key: String, in arguments: [String: Any]) throws -> Bool? {
+        guard let value = arguments[key] else {
+            return nil
+        }
+
+        if let bool = value as? Bool {
+            return bool
+        }
+
+        if let number = value as? NSNumber, CFGetTypeID(number as CFTypeRef) == CFBooleanGetTypeID() {
+            return number.boolValue
+        }
+
+        throw ComputerUseError.invalidArguments("\(key) must be a boolean")
     }
 
     private func optionalTextLimit(_ key: String, in arguments: [String: Any]) throws -> SnapshotTextLimit? {
@@ -163,27 +198,50 @@ public final class ComputerUseToolDispatcher {
     }
 
     private func requireDouble(_ key: String, in arguments: [String: Any]) throws -> Double {
-        guard let value = optionalDouble(key, in: arguments) else {
+        guard let value = try optionalDouble(key, in: arguments) else {
             throw ComputerUseError.missingArgument(key)
         }
 
         return value
     }
 
-    private func optionalDouble(_ key: String, in arguments: [String: Any]) -> Double? {
-        if let double = arguments[key] as? Double {
+    private func optionalDouble(_ key: String, in arguments: [String: Any]) throws -> Double? {
+        guard let raw = arguments[key] else {
+            return nil
+        }
+
+        if let number = raw as? NSNumber, CFGetTypeID(number as CFTypeRef) == CFBooleanGetTypeID() {
+            throw ComputerUseError.invalidArguments("\(key) must be a number")
+        }
+
+        if let double = raw as? Double {
             return double
         }
 
-        if let integer = arguments[key] as? Int {
+        if let integer = raw as? Int {
             return Double(integer)
         }
 
-        if let number = arguments[key] as? NSNumber {
+        if let number = raw as? NSNumber {
             return number.doubleValue
         }
 
         return nil
+    }
+
+    private func optionalMouseButton(in arguments: [String: Any]) throws -> String? {
+        guard let raw = optionalString("mouse_button", in: arguments) else {
+            return nil
+        }
+
+        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard MouseButtonKind(rawValue: normalized) != nil else {
+            throw ComputerUseError.invalidArguments(
+                "mouse_button must be one of \(MouseButtonKind.allCases.map(\.rawValue).joined(separator: ", "))"
+            )
+        }
+
+        return normalized
     }
 
     private func optionalPositiveInt(_ key: String, in arguments: [String: Any]) throws -> Int? {
@@ -195,6 +253,12 @@ public final class ComputerUseToolDispatcher {
     }
 
     private func positiveInt(from value: Any, key: String, expectedDescription: String) throws -> Int {
+        // CFBoolean NSNumbers (JSON true/false) bridge-cast to Int/Double, so
+        // the boolean check must run before any numeric branch.
+        if let number = value as? NSNumber, CFGetTypeID(number as CFTypeRef) == CFBooleanGetTypeID() {
+            throw ComputerUseError.invalidArguments("\(key) must be \(expectedDescription)")
+        }
+
         if let integer = value as? Int {
             return try validatePositiveInt(integer, key: key, expectedDescription: expectedDescription)
         }
@@ -204,9 +268,6 @@ public final class ComputerUseToolDispatcher {
         }
 
         if let number = value as? NSNumber {
-            if CFGetTypeID(number as CFTypeRef) == CFBooleanGetTypeID() {
-                throw ComputerUseError.invalidArguments("\(key) must be \(expectedDescription)")
-            }
             return try validatePositiveWholeNumber(number.doubleValue, key: key, expectedDescription: expectedDescription)
         }
 
@@ -246,10 +307,12 @@ public struct OpenComputerUseCallSpec {
 public struct OpenComputerUseCallOutput {
     public let jsonObject: Any
     public let hasToolError: Bool
+    public let errorInfo: ComputerUseErrorInfo?
 
-    public init(jsonObject: Any, hasToolError: Bool) {
+    public init(jsonObject: Any, hasToolError: Bool, errorInfo: ComputerUseErrorInfo? = nil) {
         self.jsonObject = jsonObject
         self.hasToolError = hasToolError
+        self.errorInfo = errorInfo
     }
 
     public func jsonText() throws -> String {
@@ -266,6 +329,21 @@ public struct OpenComputerUseCallOutput {
 
 public typealias OpenComputerUseSleepHandler = (TimeInterval) -> Void
 
+/// Validate every call in a sequence against the tool schemas before any
+/// call executes. Returns nil when all calls are valid; otherwise the
+/// structured failure for the first invalid call (0-based `callIndex`).
+public func preflightOpenComputerUseCalls(_ calls: [OpenComputerUseCallSpec]) -> ComputerUseErrorInfo? {
+    for (index, call) in calls.enumerated() {
+        do {
+            try ToolSchemaValidator.validate(tool: call.tool, arguments: call.arguments)
+        } catch {
+            return computerUseErrorInfo(for: error, phase: .preflight, callIndex: index)
+        }
+    }
+
+    return nil
+}
+
 public func runOpenComputerUseCall(
     _ invocation: OpenComputerUseCallInvocation,
     service: ComputerUseService = ComputerUseService(),
@@ -279,19 +357,47 @@ public func runOpenComputerUseCall(
             json: argumentsJSON,
             file: argumentsFile
         )
+
+        if let preflightError = preflightOpenComputerUseCalls([
+            OpenComputerUseCallSpec(tool: toolName, arguments: arguments),
+        ]) {
+            return OpenComputerUseCallOutput(
+                jsonObject: [
+                    "error": preflightError.asDictionary,
+                    "calls_executed": 0,
+                ],
+                hasToolError: true,
+                errorInfo: preflightError
+            )
+        }
+
         let result = dispatcher.callToolAsResult(name: toolName, arguments: arguments)
         return OpenComputerUseCallOutput(
             jsonObject: result.asDictionary,
-            hasToolError: result.isError
+            hasToolError: result.isError,
+            errorInfo: result.errorInfo
         )
 
     case let .sequence(callsJSON, callsFile, interCallDelay):
         let calls = try readOpenComputerUseCallSequence(json: callsJSON, file: callsFile)
+
+        if let preflightError = preflightOpenComputerUseCalls(calls) {
+            return OpenComputerUseCallOutput(
+                jsonObject: [
+                    "error": preflightError.asDictionary,
+                    "calls_executed": 0,
+                ],
+                hasToolError: true,
+                errorInfo: preflightError
+            )
+        }
+
         var outputs: [[String: Any]] = []
         var hasToolError = false
+        var firstErrorInfo: ComputerUseErrorInfo?
 
         for (index, call) in calls.enumerated() {
-            let result = dispatcher.callToolAsResult(name: call.tool, arguments: call.arguments)
+            let result = dispatcher.callToolAsResult(name: call.tool, arguments: call.arguments, callIndex: index)
             outputs.append([
                 "tool": call.tool,
                 "result": result.asDictionary,
@@ -299,6 +405,7 @@ public func runOpenComputerUseCall(
 
             if result.isError {
                 hasToolError = true
+                firstErrorInfo = result.errorInfo
                 break
             }
 
@@ -307,7 +414,11 @@ public func runOpenComputerUseCall(
             }
         }
 
-        return OpenComputerUseCallOutput(jsonObject: outputs, hasToolError: hasToolError)
+        return OpenComputerUseCallOutput(
+            jsonObject: outputs,
+            hasToolError: hasToolError,
+            errorInfo: firstErrorInfo
+        )
     }
 }
 

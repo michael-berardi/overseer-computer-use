@@ -56,7 +56,7 @@ private enum SoftwareCursorGlyphColors {
 }
 
 enum SoftwareCursorGlyphRenderer {
-    nonisolated(unsafe) private static let referenceImage = loadReferenceCursorWindowImage()
+    private static let referenceImage = loadReferenceCursorWindowImage()
 
     static func draw(
         in bounds: CGRect,

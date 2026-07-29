@@ -45,23 +45,47 @@ enum SnapshotRecoveryPolicy: Equatable {
 public struct AccessibilityTreeLimits: Equatable, Sendable {
     public static let defaultMaxNodeCount = 1200
     public static let defaultMaxDepth = 64
+    public static let defaultMaxVisitedNodeCount = 10_000
+    public static let defaultMaxVisitedDepth = 256
     public static let defaults = AccessibilityTreeLimits(
         maxNodeCount: defaultMaxNodeCount,
         maxDepth: defaultMaxDepth
     )
 
+    /// Maximum number of nodes emitted into the rendered snapshot.
     public let maxNodeCount: Int
+    /// Maximum depth of emitted nodes in the rendered snapshot.
     public let maxDepth: Int
+    /// Maximum number of accessibility nodes visited while walking the tree,
+    /// including elided nodes that are never emitted.
+    public let maxVisitedNodeCount: Int
+    /// Maximum recursion depth while walking the tree, including elided
+    /// containers that do not increase the emitted depth.
+    public let maxVisitedDepth: Int
 
-    public init(maxNodeCount: Int = defaultMaxNodeCount, maxDepth: Int = defaultMaxDepth) {
+    public init(
+        maxNodeCount: Int = defaultMaxNodeCount,
+        maxDepth: Int = defaultMaxDepth,
+        maxVisitedNodeCount: Int = defaultMaxVisitedNodeCount,
+        maxVisitedDepth: Int = defaultMaxVisitedDepth
+    ) {
         self.maxNodeCount = maxNodeCount
         self.maxDepth = maxDepth
+        self.maxVisitedNodeCount = maxVisitedNodeCount
+        self.maxVisitedDepth = maxVisitedDepth
     }
 
-    public func replacing(maxNodeCount: Int? = nil, maxDepth: Int? = nil) -> AccessibilityTreeLimits {
+    public func replacing(
+        maxNodeCount: Int? = nil,
+        maxDepth: Int? = nil,
+        maxVisitedNodeCount: Int? = nil,
+        maxVisitedDepth: Int? = nil
+    ) -> AccessibilityTreeLimits {
         AccessibilityTreeLimits(
             maxNodeCount: maxNodeCount ?? self.maxNodeCount,
-            maxDepth: maxDepth ?? self.maxDepth
+            maxDepth: maxDepth ?? self.maxDepth,
+            maxVisitedNodeCount: maxVisitedNodeCount ?? self.maxVisitedNodeCount,
+            maxVisitedDepth: maxVisitedDepth ?? self.maxVisitedDepth
         )
     }
 }
@@ -89,15 +113,80 @@ public struct SnapshotTextLimit: Equatable, Sendable {
 let accessibilityTreeMaxNodeCount = AccessibilityTreeLimits.defaultMaxNodeCount
 let accessibilityTreeMaxDepth = AccessibilityTreeLimits.defaultMaxDepth
 let screenshotCaptureTimeout: TimeInterval = 5
-let screenshotResultMaxPNGBytes = 900_000
-let screenshotResultMaxDimension: CGFloat = 1280
-let screenshotResultMinScale: CGFloat = 0.25
+/// Finite timeout applied to accessibility messaging so a hung target app
+/// cannot block a snapshot or hit test indefinitely.
+let axMessagingTimeoutSeconds: Float = 4
 private let windowVisibilityRecoveryDelay: TimeInterval = 0.7
 private let axWebAreaRole = "AXWebArea"
 private let axContentsAttribute = "AXContents"
 private let axVisibleChildrenAttribute = "AXVisibleChildren"
 private let anonymousActionTargetMaxWidth: CGFloat = 240
 private let anonymousActionTargetMaxHeight: CGFloat = 120
+
+/// Hard limits applied to screenshot PNG encoding. The long edge of the
+/// encoded image never exceeds `maxDimension` pixels and the PNG payload
+/// never exceeds `maxBytes`; encoding gives up with an explicit error after
+/// `maxEncodeAttempts` attempts.
+public struct ScreenshotEncodingLimits: Equatable, Sendable {
+    public static let defaultMaxBytes = 900_000
+    public static let defaultMaxDimension: CGFloat = 1280
+    public static let defaultMaxEncodeAttempts = 3
+    public static let defaultScaleStep: CGFloat = 0.7
+    public static let defaults = ScreenshotEncodingLimits()
+
+    public let maxBytes: Int
+    public let maxDimension: CGFloat
+    public let maxEncodeAttempts: Int
+    /// Factor applied to the working scale between encode attempts.
+    public let scaleStep: CGFloat
+
+    public init(
+        maxBytes: Int = defaultMaxBytes,
+        maxDimension: CGFloat = defaultMaxDimension,
+        maxEncodeAttempts: Int = defaultMaxEncodeAttempts,
+        scaleStep: CGFloat = defaultScaleStep
+    ) {
+        precondition(maxBytes > 0, "maxBytes must be positive")
+        precondition(maxDimension > 0, "maxDimension must be positive")
+        precondition(maxEncodeAttempts > 0, "maxEncodeAttempts must be positive")
+        precondition(scaleStep > 0 && scaleStep < 1, "scaleStep must be in (0, 1)")
+        self.maxBytes = maxBytes
+        self.maxDimension = maxDimension
+        self.maxEncodeAttempts = maxEncodeAttempts
+        self.scaleStep = scaleStep
+    }
+
+    /// Scale factor that brings an image of `pixelSize` within `maxDimension`
+    /// on its long edge. Returns 1 when the image already fits.
+    public func fittingScale(forPixelSize pixelSize: CGSize) -> CGFloat {
+        let largestDimension = max(pixelSize.width, pixelSize.height)
+        guard largestDimension > 0 else {
+            return 1
+        }
+        return min(1, maxDimension / largestDimension)
+    }
+}
+
+/// A screenshot PNG encoded within `ScreenshotEncodingLimits` together with
+/// the pixel dimensions of the encoded image.
+public struct EncodedScreenshot: Equatable, Sendable {
+    public let pngData: Data
+    public let pixelSize: CGSize
+
+    public init(pngData: Data, pixelSize: CGSize) {
+        self.pngData = pngData
+        self.pixelSize = pixelSize
+    }
+}
+
+public enum ScreenshotEncodingError: Error, Equatable, Sendable {
+    /// The source image has no pixels.
+    case emptyImage
+    /// PNG encoding itself failed.
+    case encodingFailed
+    /// The payload still exceeded the byte limit after all encode attempts.
+    case exceedsByteLimit(bytes: Int, maxBytes: Int, attempts: Int)
+}
 
 public struct AppSnapshot {
     public let app: RunningAppDescriptor
@@ -106,6 +195,12 @@ public struct AppSnapshot {
     let targetWindowID: CGWindowID?
     let targetWindowLayer: Int?
     public let screenshotPNGData: Data?
+    /// Pixel dimensions of the encoded screenshot PNG, when one is attached.
+    /// Stored at capture time so consumers never need to reparse the PNG.
+    public let screenshotPixelSize: CGSize?
+    /// Unique identifier for this snapshot instance. Callers pass it back to
+    /// actions so stale state is rejected before any input is simulated.
+    public let stateID: String
     let mode: SnapshotMode
     let treeLines: [String]
     let focusedSummary: String?
@@ -113,6 +208,38 @@ public struct AppSnapshot {
     let selectedText: String?
 
     let elements: [Int: ElementRecord]
+
+    init(
+        app: RunningAppDescriptor,
+        windowTitle: String?,
+        windowBounds: CGRect?,
+        targetWindowID: CGWindowID?,
+        targetWindowLayer: Int?,
+        screenshotPNGData: Data?,
+        screenshotPixelSize: CGSize? = nil,
+        stateID: String = "",
+        mode: SnapshotMode,
+        treeLines: [String],
+        focusedSummary: String?,
+        focusedElement: AXUIElement?,
+        selectedText: String?,
+        elements: [Int: ElementRecord]
+    ) {
+        self.app = app
+        self.windowTitle = windowTitle
+        self.windowBounds = windowBounds
+        self.targetWindowID = targetWindowID
+        self.targetWindowLayer = targetWindowLayer
+        self.screenshotPNGData = screenshotPNGData
+        self.screenshotPixelSize = screenshotPixelSize
+        self.stateID = stateID
+        self.mode = mode
+        self.treeLines = treeLines
+        self.focusedSummary = focusedSummary
+        self.focusedElement = focusedElement
+        self.selectedText = selectedText
+        self.elements = elements
+    }
 
     public var renderedText: String {
         renderedText(style: .fullState)
@@ -125,6 +252,7 @@ public struct AppSnapshot {
 
         lines.append("App=\(appReference) (pid \(app.pid))")
         lines.append("Window: \(quoted(displayTitle)), App: \(app.name).")
+        lines.append("State-ID: \(stateID)")
         lines.append(contentsOf: treeLines)
 
         if let selectedText, !selectedText.isEmpty {
@@ -149,18 +277,19 @@ enum SnapshotBuilder {
         for app: RunningAppDescriptor,
         textLimit: SnapshotTextLimit = .defaults,
         treeLimits: AccessibilityTreeLimits = .defaults,
-        recoveryPolicy: SnapshotRecoveryPolicy = .allowActivation
+        recoveryPolicy: SnapshotRecoveryPolicy = .allowActivation,
+        includeScreenshot: Bool = true,
+        windowTitleHint: String? = nil
     ) throws -> AppSnapshot {
         if app.name == FixtureBridge.appName, let fixtureState = try FixtureBridge.readState() {
             return buildFixtureSnapshot(app: app, state: fixtureState)
         }
 
         let permissions = PermissionDiagnostics.current()
-        guard permissions.accessibilityTrusted else {
-            throw ComputerUseError.permissionDenied("Accessibility permission is required. Run `open-computer-use doctor` and grant access to Open Computer Use.")
-        }
+        try validateSnapshotPermissions(permissions, includeScreenshot: includeScreenshot)
 
         let appElement = AXUIElementCreateApplication(app.pid)
+        applyAccessibilityMessagingTimeout(to: appElement)
         enableBestEffortAccessibilityModes(appElement)
         let systemWide = AXUIElementCreateSystemWide()
         var focusedApplication = copyElement(systemWide, attribute: kAXFocusedApplicationAttribute)
@@ -172,6 +301,12 @@ enum SnapshotBuilder {
             focusedWindow = preferredFocusedWindow(appElement: appElement, appPID: app.pid, focusedApplication: focusedApplication, systemWide: systemWide)
         }
 
+        if let windowTitleHint,
+           !windowTitleHint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let hintedWindow = window(matchingTitleHint: windowTitleHint, appElement: appElement) {
+            focusedWindow = hintedWindow
+        }
+
         var rootWindow: AXUIElement
         guard let resolvedFocusedWindow = focusedWindow else {
             throw ComputerUseError.stateUnavailable(computerUseNoWindowFoundMessage)
@@ -179,7 +314,7 @@ enum SnapshotBuilder {
         rootWindow = resolvedFocusedWindow
 
         var windowTitle = stringValue(of: rootWindow, attribute: kAXTitleAttribute)
-        var windowCapture = WindowCapture.resolve(for: app.pid, titleHint: windowTitle)
+        var windowCapture = try WindowCapture.resolve(for: app.pid, titleHint: windowTitle, includeScreenshot: includeScreenshot)
         if windowCapture == nil,
            recoveryPolicy == .allowActivation,
            recoverVisibleWindow(for: app, appElement: appElement, preferredWindow: rootWindow) {
@@ -187,7 +322,7 @@ enum SnapshotBuilder {
             if let recoveredWindow = preferredFocusedWindow(appElement: appElement, appPID: app.pid, focusedApplication: focusedApplication, systemWide: systemWide) {
                 rootWindow = recoveredWindow
                 windowTitle = stringValue(of: recoveredWindow, attribute: kAXTitleAttribute)
-                windowCapture = WindowCapture.resolve(for: app.pid, titleHint: windowTitle)
+                windowCapture = try WindowCapture.resolve(for: app.pid, titleHint: windowTitle, includeScreenshot: includeScreenshot)
             }
         }
 
@@ -220,7 +355,7 @@ enum SnapshotBuilder {
         treeLimits: AccessibilityTreeLimits
     ) -> AppSnapshot {
         let windowBounds = windowCapture.bounds
-        let screenshotPNGData = windowCapture.pngDataIfAvailable()
+        let screenshot = windowCapture.screenshot
         let focusedElement = preferredFocusedElement(appElement: appElement, appPID: app.pid, focusedApplication: focusedApplication, systemWide: systemWide)
         let selectedText = focusedElement.flatMap { copySelectedText($0, textLimit: textLimit) }
         let context = RenderContext(
@@ -244,7 +379,9 @@ enum SnapshotBuilder {
             windowBounds: windowBounds,
             targetWindowID: windowCapture.windowID,
             targetWindowLayer: windowCapture.layer,
-            screenshotPNGData: screenshotPNGData,
+            screenshotPNGData: screenshot?.pngData,
+            screenshotPixelSize: screenshot?.pixelSize,
+            stateID: makeSnapshotStateID(pid: app.pid, windowID: windowCapture.windowID),
             mode: .accessibility,
             treeLines: renderer.lines,
             focusedSummary: renderer.focusedSummary,
@@ -301,12 +438,36 @@ enum SnapshotBuilder {
             return nil
         }
 
+
         return windows.first(where: isUsableWindowElement(_:))
     }
 
     private static func firstAnyWindow(for appElement: AXUIElement) -> AXUIElement? {
         copyElement(appElement, attribute: kAXFocusedWindowAttribute)
             ?? copyArray(appElement, attribute: kAXWindowsAttribute)?.first(where: { stringValue(of: $0, attribute: kAXRoleAttribute) == kAXWindowRole as String })
+    }
+
+    /// First AX window whose title contains the hint (case-insensitive).
+    /// Exact title matches win over prefix matches, which win over substrings.
+    private static func window(matchingTitleHint hint: String, appElement: AXUIElement) -> AXUIElement? {
+        guard let windows = copyArray(appElement, attribute: kAXWindowsAttribute) else {
+            return nil
+        }
+
+        let titled: [(element: AXUIElement, title: String)] = windows.compactMap { window in
+            guard let title = stringValue(of: window, attribute: kAXTitleAttribute), !title.isEmpty else {
+                return nil
+            }
+            return (window, title)
+        }
+
+        if let exact = titled.first(where: { $0.title.caseInsensitiveCompare(hint) == .orderedSame }) {
+            return exact.element
+        }
+        if let prefix = titled.first(where: { $0.title.range(of: hint, options: [.caseInsensitive, .anchored]) != nil }) {
+            return prefix.element
+        }
+        return titled.first(where: { $0.title.range(of: hint, options: .caseInsensitive) != nil })?.element
     }
 
     private static func unminimize(_ window: AXUIElement) -> Bool {
@@ -400,6 +561,8 @@ enum SnapshotBuilder {
             targetWindowID: nil,
             targetWindowLayer: nil,
             screenshotPNGData: nil,
+            screenshotPixelSize: nil,
+            stateID: makeSnapshotStateID(pid: app.pid, windowID: nil),
             mode: .fixture,
             treeLines: lines,
             focusedSummary: focusedSummary,
@@ -407,6 +570,30 @@ enum SnapshotBuilder {
             selectedText: nil,
             elements: records
         )
+    }
+}
+
+/// Generates a unique snapshot state identifier. Callers hand this back to
+/// mutating actions so a stale snapshot is rejected before any input happens.
+func makeSnapshotStateID(pid: pid_t, windowID: CGWindowID?) -> String {
+    "\(pid):\(windowID ?? 0):\(UUID().uuidString.lowercased())"
+}
+
+/// Applies a finite accessibility messaging timeout so a hung target process
+/// cannot block snapshot or hit-test calls indefinitely. Best-effort: the
+/// error is ignored because some processes reject the call.
+func applyAccessibilityMessagingTimeout(to appElement: AXUIElement, timeoutSeconds: Float = axMessagingTimeoutSeconds) {
+    AXUIElementSetMessagingTimeout(appElement, timeoutSeconds)
+}
+
+func screenshotEncodingErrorMessage(_ error: ScreenshotEncodingError) -> String {
+    switch error {
+    case .emptyImage:
+        return "Screenshot capture produced an empty image."
+    case .encodingFailed:
+        return "Screenshot PNG encoding failed."
+    case .exceedsByteLimit(let bytes, let maxBytes, let attempts):
+        return "Screenshot PNG is \(bytes) bytes, exceeding the \(maxBytes)-byte limit after \(attempts) encode attempts."
     }
 }
 
@@ -418,13 +605,33 @@ private func enableBestEffortAccessibilityModes(_ appElement: AXUIElement) {
     _ = AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
 }
 
+func validateSnapshotPermissions(
+    _ permissions: PermissionDiagnostics,
+    includeScreenshot: Bool
+) throws {
+    guard permissions.accessibilityTrusted else {
+        throw ComputerUseError.permissionDenied("Accessibility permission is required. Run `open-computer-use doctor` and grant access to Open Computer Use.")
+    }
+    if includeScreenshot, !permissions.screenCaptureGranted {
+        throw ComputerUseError.permissionDenied("Screen Recording permission is required for screenshots. Run `open-computer-use doctor` and grant access to Open Computer Use.")
+    }
+}
+
+
 private struct WindowCapture {
     let windowID: CGWindowID
     let layer: Int
     let bounds: CGRect
-    let image: CGImage?
+    /// Encoded screenshot within hard limits; nil only when the caller did not
+    /// request a screenshot.
+    let screenshot: EncodedScreenshot?
 
-    static func resolve(for pid: pid_t, titleHint: String?) -> WindowCapture? {
+    static func resolve(
+        for pid: pid_t,
+        titleHint: String?,
+        includeScreenshot: Bool = true,
+        encodingLimits: ScreenshotEncodingLimits = .defaults
+    ) throws -> WindowCapture? {
         guard let infoList = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
             return nil
         }
@@ -457,13 +664,45 @@ private struct WindowCapture {
             return nil
         }
 
-        let image = captureImage(windowID: best.windowID, bounds: best.bounds)
+        let screenshot: EncodedScreenshot?
+        if includeScreenshot {
+            let image: CGImage
+            do {
+                guard let captured = try captureImage(
+                    windowID: best.windowID,
+                    bounds: best.bounds,
+                    encodingLimits: encodingLimits
+                ) else {
+                    throw ComputerUseError.stateUnavailable("Screenshot capture failed because ScreenCaptureKit could not resolve the target window.")
+                }
+                image = captured
+            } catch let error as ComputerUseError {
+                throw error
+            } catch {
+                throw ComputerUseError.stateUnavailable("Screenshot capture failed: \(error.localizedDescription)")
+            }
 
-        return WindowCapture(windowID: best.windowID, layer: best.layer, bounds: best.bounds, image: image)
+            do {
+                screenshot = try encodeBoundedScreenshotPNG(for: image, limits: encodingLimits)
+            } catch let error as ScreenshotEncodingError {
+                throw ComputerUseError.message(screenshotEncodingErrorMessage(error))
+            } catch {
+                throw ComputerUseError.message(screenshotEncodingErrorMessage(.encodingFailed))
+            }
+        } else {
+            screenshot = nil
+        }
+
+        return WindowCapture(
+            windowID: best.windowID,
+            layer: best.layer,
+            bounds: best.bounds,
+            screenshot: screenshot
+        )
     }
 
-    private static func captureImage(windowID: CGWindowID, bounds: CGRect) -> CGImage? {
-        try? BlockingAsyncBridge.run(timeout: screenshotCaptureTimeout) {
+    private static func captureImage(windowID: CGWindowID, bounds: CGRect, encodingLimits: ScreenshotEncodingLimits) throws -> CGImage? {
+        try BlockingAsyncBridge.run(timeout: screenshotCaptureTimeout) {
             let shareableContent = try await SCShareableContent.current
             guard let window = shareableContent.windows.first(where: { $0.windowID == windowID }) else {
                 return nil
@@ -472,10 +711,19 @@ private struct WindowCapture {
             let configuration = SCStreamConfiguration()
             let scaleFactor = bestEffortScaleFactor(for: bounds)
             let captureSize = window.frame.isEmpty ? bounds.size : window.frame.size
-            configuration.width = max(1, Int(ceil(captureSize.width * scaleFactor)))
-            configuration.height = max(1, Int(ceil(captureSize.height * scaleFactor)))
+            // Scale the capture down before encoding whenever the Retina-scale
+            // capture would exceed the hard output limits.
+            let fittingScale = encodingLimits.fittingScale(forPixelSize: CGSize(
+                width: captureSize.width * scaleFactor,
+                height: captureSize.height * scaleFactor
+            ))
+            let outputScale = scaleFactor * fittingScale
+            configuration.width = max(1, Int(ceil(captureSize.width * outputScale)))
+            configuration.height = max(1, Int(ceil(captureSize.height * outputScale)))
             configuration.showsCursor = false
-            configuration.scalesToFit = false
+            // Aspect ratio is preserved by outputScale, so scale-to-fill only
+            // absorbs sub-pixel rounding drift instead of letterboxing.
+            configuration.scalesToFit = true
             configuration.ignoreShadowsSingleWindow = true
 
             let filter = SCContentFilter(desktopIndependentWindow: window)
@@ -487,14 +735,6 @@ private struct WindowCapture {
         NSScreen.screens.first(where: { $0.frame.intersects(bounds) })?.backingScaleFactor
             ?? NSScreen.main?.backingScaleFactor
             ?? 1
-    }
-
-    func pngDataIfAvailable() -> Data? {
-        guard let image else {
-            return nil
-        }
-
-        return boundedScreenshotPNGData(for: image)
     }
 }
 
@@ -539,41 +779,55 @@ func preferredWindowCaptureCandidate(_ candidates: [WindowCaptureCandidate], tit
     return hinted
 }
 
-func boundedScreenshotPNGData(
+/// Encodes `image` as a PNG within hard limits: the long edge never exceeds
+/// `limits.maxDimension` pixels, the payload never exceeds `limits.maxBytes`,
+/// and at most `limits.maxEncodeAttempts` PNG encodes are performed. The
+/// image is scaled down to fit the dimension limit *before* the first encode
+/// attempt. Throws `ScreenshotEncodingError` when the limits cannot be met.
+func encodeBoundedScreenshotPNG(
     for image: CGImage,
-    maxBytes: Int = screenshotResultMaxPNGBytes,
-    maxDimension: CGFloat = screenshotResultMaxDimension,
-    minScale: CGFloat = screenshotResultMinScale
-) -> Data? {
-    guard image.width > 0, image.height > 0, maxBytes > 0 else {
-        return nil
+    limits: ScreenshotEncodingLimits = .defaults
+) throws -> EncodedScreenshot {
+    guard image.width > 0, image.height > 0 else {
+        throw ScreenshotEncodingError.emptyImage
     }
 
-    let original = pngData(for: image)
-    let largestDimension = CGFloat(max(image.width, image.height))
-    var scale = min(1, maxDimension / largestDimension)
+    var scale = limits.fittingScale(forPixelSize: CGSize(width: image.width, height: image.height))
+    var lastEncodedBytes = 0
 
-    if scale >= 1, let original, original.count <= maxBytes {
-        return original
-    }
-
-    var best = original
-    while scale >= minScale {
-        guard let resized = resizedCGImage(image, scale: scale),
-              let data = pngData(for: resized)
-        else {
-            break
+    for attempt in 1...limits.maxEncodeAttempts {
+        let working: CGImage
+        if scale >= 1 {
+            working = image
+        } else {
+            guard let resized = resizedCGImage(image, scale: scale) else {
+                throw ScreenshotEncodingError.encodingFailed
+            }
+            working = resized
         }
 
-        best = data
-        if data.count <= maxBytes {
-            return data
+        guard let data = pngData(for: working) else {
+            throw ScreenshotEncodingError.encodingFailed
         }
 
-        scale *= 0.85
+        if data.count <= limits.maxBytes {
+            return EncodedScreenshot(
+                pngData: data,
+                pixelSize: CGSize(width: working.width, height: working.height)
+            )
+        }
+
+        lastEncodedBytes = data.count
+        if attempt < limits.maxEncodeAttempts {
+            scale *= limits.scaleStep
+        }
     }
 
-    return best
+    throw ScreenshotEncodingError.exceedsByteLimit(
+        bytes: lastEncodedBytes,
+        maxBytes: limits.maxBytes,
+        attempts: limits.maxEncodeAttempts
+    )
 }
 
 private func pngData(for image: CGImage) -> Data? {
@@ -666,6 +920,7 @@ private struct RenderContext {
 private struct TreeRenderer {
     let context: RenderContext
     var nextIndex = 0
+    var visitedNodeCount = 0
     var lines: [String] = []
     var records: [Int: ElementRecord] = [:]
     var identifierIndex: [String: String] = [:]
@@ -675,7 +930,19 @@ private struct TreeRenderer {
         self.context = context
     }
 
-    mutating func render(_ root: AXUIElement, depth: Int = 0, ancestors: [AXUIElement] = []) {
+    mutating func render(_ root: AXUIElement, depth: Int = 0, visitedDepth: Int = 0, ancestors: [AXUIElement] = []) {
+        // Bound the raw walk itself: elided containers recurse without
+        // increasing `depth` or `nextIndex`, so only visited counters keep a
+        // pathological tree from walking unbounded.
+        guard shouldContinueVisiting(
+            visitedNodeCount: visitedNodeCount,
+            visitedDepth: visitedDepth,
+            limits: context.treeLimits
+        ) else {
+            return
+        }
+        visitedNodeCount += 1
+
         guard shouldContinueRendering(nextIndex: nextIndex, depth: depth, limits: context.treeLimits) else {
             return
         }
@@ -772,7 +1039,7 @@ private struct TreeRenderer {
             preservesAnonymousActionTarget: rendersAnonymousActionTarget
         ) {
             for child in childElements {
-                render(child, depth: depth, ancestors: nextAncestors)
+                render(child, depth: depth, visitedDepth: visitedDepth + 1, ancestors: nextAncestors)
             }
             return
         }
@@ -851,7 +1118,7 @@ private struct TreeRenderer {
         if rendersSummaryAsChildren, let genericTextSummary {
             renderSyntheticText(genericTextSummary, representedBy: root, depth: depth + 1)
             for image in summaryImageChildren {
-                render(image, depth: depth + 1, ancestors: nextAncestors)
+                render(image, depth: depth + 1, visitedDepth: visitedDepth + 1, ancestors: nextAncestors)
             }
             return
         }
@@ -861,7 +1128,7 @@ private struct TreeRenderer {
         }
 
         for child in childElements {
-            render(child, depth: depth + 1, ancestors: nextAncestors)
+            render(child, depth: depth + 1, visitedDepth: visitedDepth + 1, ancestors: nextAncestors)
         }
     }
 
@@ -972,6 +1239,14 @@ private func shouldSkipChild(_ child: AXUIElement, of parent: AXUIElement) -> Bo
     }
 
     return stringValue(of: child, attribute: kAXTitleAttribute) == "Apple"
+}
+
+func shouldContinueVisiting(
+    visitedNodeCount: Int,
+    visitedDepth: Int,
+    limits: AccessibilityTreeLimits = .defaults
+) -> Bool {
+    visitedNodeCount < limits.maxVisitedNodeCount && visitedDepth < limits.maxVisitedDepth
 }
 
 func shouldContinueRendering(

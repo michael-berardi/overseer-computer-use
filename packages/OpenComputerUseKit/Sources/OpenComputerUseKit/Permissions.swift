@@ -108,12 +108,12 @@ public struct PermissionDiagnostics: Sendable {
 }
 
 public enum PermissionSupport {
-    public static let bundleDisplayName = "Open Computer Use"
+    public static let bundleDisplayName = "OverSeer Computer Use"
     public static let bundleIdentifier = "com.ifuryst.opencomputeruse"
-    public static let developmentBundleDisplayName = "Open Computer Use (Dev)"
+    public static let developmentBundleDisplayName = "OverSeer Computer Use (Dev)"
     public static let developmentBundleIdentifier = "com.ifuryst.opencomputeruse.dev"
-    private static let releaseAppBundleName = "\(bundleDisplayName).app"
-    private static let developmentAppBundleName = "\(developmentBundleDisplayName).app"
+    private static let releaseAppBundleName = "Open Computer Use.app"
+    private static let developmentAppBundleName = "Open Computer Use (Dev).app"
     private static let appVariantInfoKey = "OpenComputerUseAppVariant"
     private static let npmPackageNames = [
         "open-computer-use",
