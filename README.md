@@ -138,6 +138,12 @@ open-computer-use call --calls-file examples/textedit-overlay-seq.json --sleep 0
 # Check permissions; onboarding only opens when something is missing
 open-computer-use doctor
 
+# Build, notarize, and install one stable local app identity. Replacing an
+# authorized ad-hoc copy with a differently signed build requires new grants.
+OPEN_COMPUTER_USE_NOTARYTOOL_PROFILE=your-notary-profile \
+OPEN_COMPUTER_USE_INSTALL_APP_PATH="$HOME/Applications/Open Computer Use.app" \
+./scripts/build-open-computer-use-app.sh release
+
 # Run local validation from a source checkout
 make smoke
 OPEN_COMPUTER_USE_STRESS_LOOPS=20 make stress

@@ -8,6 +8,8 @@ arch_mode="native"
 codesign_mode="${OPEN_COMPUTER_USE_CODESIGN_MODE:-auto}"
 codesign_identity="${OPEN_COMPUTER_USE_CODESIGN_IDENTITY:-}"
 codesign_keychain="${OPEN_COMPUTER_USE_CODESIGN_KEYCHAIN:-}"
+notarytool_profile="${OPEN_COMPUTER_USE_NOTARYTOOL_PROFILE:-}"
+install_app_path="${OPEN_COMPUTER_USE_INSTALL_APP_PATH:-}"
 
 usage() {
   cat <<'EOF'
@@ -21,6 +23,8 @@ Environment:
   OPEN_COMPUTER_USE_CODESIGN_MODE=auto|identity|adhoc|none
   OPEN_COMPUTER_USE_CODESIGN_IDENTITY="Developer ID Application: Example, Inc. (TEAMID)"
   OPEN_COMPUTER_USE_CODESIGN_KEYCHAIN=/path/to/signing.keychain-db
+  OPEN_COMPUTER_USE_NOTARYTOOL_PROFILE=profile
+  OPEN_COMPUTER_USE_INSTALL_APP_PATH=/path/to/Open Computer Use.app
 EOF
 }
 
@@ -229,6 +233,45 @@ codesign_app_bundle() {
   else
     echo "Signed ${app_path} with ${identity}" >&2
   fi
+  codesign --verify --deep --strict --verbose=2 "${app_path}"
+}
+
+notarize_app_bundle() {
+  local app_path="${1:-}"
+
+  if [[ -z "${notarytool_profile}" ]]; then
+    return
+  fi
+
+  local submission_archive
+  submission_archive="$(mktemp "${TMPDIR:-/tmp}/open-computer-use-notary.XXXXXX.zip")"
+  ditto -c -k --sequesterRsrc --keepParent "${app_path}" "${submission_archive}"
+  xcrun notarytool submit "${submission_archive}" --keychain-profile "${notarytool_profile}" --wait
+  rm -f "${submission_archive}"
+  xcrun stapler staple "${app_path}"
+  xcrun stapler validate "${app_path}"
+}
+
+install_app_bundle() {
+  local app_path="${1:-}"
+
+  if [[ -z "${install_app_path}" ]]; then
+    return
+  fi
+
+  if [[ "${app_variant}" != "release" ]]; then
+    echo "OPEN_COMPUTER_USE_INSTALL_APP_PATH only supports release bundles." >&2
+    exit 1
+  fi
+
+  pkill -f "${install_app_path}/Contents/MacOS/OpenComputerUse" 2>/dev/null || true
+  ditto "${app_path}" "${install_app_path}"
+  codesign --verify --deep --strict --verbose=2 "${install_app_path}"
+
+  if [[ -n "${notarytool_profile}" ]]; then
+    spctl -a -vv "${install_app_path}"
+    xcrun stapler validate "${install_app_path}"
+  fi
 }
 
 cd "${repo_root}"
@@ -359,5 +402,7 @@ PLIST
 
 plutil -lint "${contents_dir}/Info.plist" >/dev/null
 codesign_app_bundle "${app_root}"
+notarize_app_bundle "${app_root}"
+install_app_bundle "${app_root}"
 
 echo "Built ${app_root} (${arch_mode}, ${configuration})"

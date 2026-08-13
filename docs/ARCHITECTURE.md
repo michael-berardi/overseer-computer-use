@@ -142,7 +142,7 @@
 - standalone cursor 构建：`swift build --product StandaloneCursor`
 - cursor lab 构建：`swift build --product CursorMotion`
 - 端到端 smoke：`./scripts/run-tool-smoke-tests.sh`（标准 9-tool smoke + visual cursor idle smoke；脚本默认以 headless 模式启动内部 fixture，避免在用户桌面弹出测试窗口）
-- app 打包：`./scripts/build-open-computer-use-app.sh debug`
+- app 打包：`./scripts/build-open-computer-use-app.sh debug`；正式本地副本可通过 `OPEN_COMPUTER_USE_NOTARYTOOL_PROFILE` 完成 notarization/staple，并通过 `OPEN_COMPUTER_USE_INSTALL_APP_PATH` 安装到固定路径。脚本会验证构建与安装后的签名；不要用新签名覆盖已授权的 ad-hoc 副本后继续假设旧 TCC 授权有效。
 - 权限 onboarding 端到端回归：`./scripts/run-permission-onboarding-e2e.sh`（需要当前 macOS 对被测 `open-computer-use` 已授予 Accessibility 与 Screen Recording；默认禁用 app-agent proxy 来测试当前 CLI 运行态，可用 `OPEN_COMPUTER_USE_E2E_CLI=/path/to/open-computer-use` 指定被测 CLI，或用 `OPEN_COMPUTER_USE_E2E_DISABLE_APP_AGENT_PROXY=0` 显式覆盖默认代理行为）
 - npm staging：`node ./scripts/npm/build-packages.mjs`
 - release tgz：`./scripts/release-package.sh`

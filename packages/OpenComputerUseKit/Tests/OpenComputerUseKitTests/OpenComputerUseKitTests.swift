@@ -562,6 +562,14 @@ final class OpenComputerUseKitTests: XCTestCase {
         XCTAssertEqual(parsed.modifiers.count, 1)
     }
 
+    func testKeyPressParserSupportsBackquoteChordAliases() throws {
+        for alias in ["grave", "backquote", "backtick"] {
+            let parsed = try KeyPressParser.parse("option+\(alias)")
+            XCTAssertEqual(parsed.displayValue, alias)
+            XCTAssertEqual(parsed.modifiers.count, 1)
+        }
+    }
+
     func testKeyPressParserSupportsOfficialXdotoolAliases() throws {
         XCTAssertEqual(try KeyPressParser.parse("BackSpace").displayValue, "backspace")
         XCTAssertEqual(try KeyPressParser.parse("Page_Up").displayValue, "page_up")
