@@ -105,16 +105,10 @@ fi
 spctl -a -vv -t exec "$app" >/dev/null
 
 mkdir -p "$install_root"
-shim_path="$install_root/overseer"
-if [[ -e "$shim_path" && ! -f "$shim_path" ]]; then
-  echo "$shim_path exists and is not a regular file" >&2
-  exit 1
-fi
-if [[ -f "$shim_path" ]] && ! grep -q 'OVERSEER_COMPUTER_USE_MANAGED_SHIM' "$shim_path"; then
-  echo "refusing to replace existing overseer command at $shim_path" >&2
-  exit 1
-fi
-cat > "$shim_path" <<'SH'
+
+write_shim() {
+  local destination="$1"
+  cat >"$destination" <<'SH'
 #!/usr/bin/env bash
 # OVERSEER_COMPUTER_USE_MANAGED_SHIM
 set -euo pipefail
@@ -127,16 +121,18 @@ fi
 if [[ "${1:-}" == "computer-use" ]]; then
   shift
 fi
-[[ -n "${1:-}" ]] || { echo "Usage: overseer computer-use <command>" >&2; exit 2; }
+[[ -n "${1:-}" ]] || { echo "Usage: overseer-computer-use <command>" >&2; exit 2; }
 case "${1:-}" in
   update)
     open -a "$app_bundle"
     ;;
   uninstall)
     sudo rm -rf "$app_bundle"
-    if grep -q 'OVERSEER_COMPUTER_USE_MANAGED_SHIM' "$HOME/.local/bin/overseer" 2>/dev/null; then
-      rm -f "$HOME/.local/bin/overseer"
-    fi
+    for managed_shim in "$HOME/.local/bin/overseer-computer-use" "$HOME/.local/bin/overseer"; do
+      if grep -q 'OVERSEER_COMPUTER_USE_MANAGED_SHIM' "$managed_shim" 2>/dev/null; then
+        rm -f "$managed_shim"
+      fi
+    done
     echo "Removed Overseer Computer Use."
     ;;
   diagnostics)
@@ -149,6 +145,26 @@ case "${1:-}" in
     ;;
 esac
 SH
-chmod 755 "$install_root/overseer"
+  chmod 755 "$destination"
+}
 
-echo "Installed Overseer Computer Use. Ensure ${install_root} is on PATH, then run: overseer computer-use doctor"
+standalone_shim="$install_root/overseer-computer-use"
+if [[ -e "$standalone_shim" && ! -f "$standalone_shim" ]]; then
+  echo "$standalone_shim exists and is not a regular file" >&2
+  exit 1
+fi
+if [[ -f "$standalone_shim" ]] && ! grep -q 'OVERSEER_COMPUTER_USE_MANAGED_SHIM' "$standalone_shim"; then
+  echo "refusing to replace existing command at $standalone_shim" >&2
+  exit 1
+fi
+write_shim "$standalone_shim"
+
+compatibility_shim="$install_root/overseer"
+if [[ ! -e "$compatibility_shim" ]] ||
+   { [[ -f "$compatibility_shim" ]] && grep -q 'OVERSEER_COMPUTER_USE_MANAGED_SHIM' "$compatibility_shim"; }; then
+  write_shim "$compatibility_shim"
+else
+  echo "Preserved existing overseer command at $compatibility_shim."
+fi
+
+echo "Installed Overseer Computer Use. Ensure ${install_root} is on PATH, then run: overseer-computer-use doctor"

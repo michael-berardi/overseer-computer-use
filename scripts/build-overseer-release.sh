@@ -52,10 +52,32 @@ zip="$output/Overseer-Computer-Use.zip"
 [[ -d "$app" ]] || fail "release app was not produced"
 
 component_plist="$output/component.plist"
-pkgbuild --analyze --component "$app" "$component_plist"
-/usr/libexec/PlistBuddy -c 'Set :0:BundleIsRelocatable false' "$component_plist"
-pkgbuild --component "$app" --component-plist "$component_plist" \
+package_root="$output/package-root"
+mkdir -p "$package_root"
+ditto "$app" "$package_root/Overseer Computer Use.app"
+cat >"$component_plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+  <dict>
+    <key>BundleHasStrictIdentifier</key>
+    <true/>
+    <key>BundleIsRelocatable</key>
+    <false/>
+    <key>BundleIsVersionChecked</key>
+    <true/>
+    <key>BundleOverwriteAction</key>
+    <string>upgrade</string>
+    <key>RootRelativeBundlePath</key>
+    <string>Overseer Computer Use.app</string>
+  </dict>
+</array>
+</plist>
+PLIST
+pkgbuild --root "$package_root" --component-plist "$component_plist" \
   --install-location /Applications --sign "$installer_identity" "$pkg"
+rm -rf "$package_root"
 rm -f "$component_plist"
 xcrun notarytool submit "$pkg" --keychain-profile "$notary_profile" --wait
 xcrun stapler staple "$pkg"
