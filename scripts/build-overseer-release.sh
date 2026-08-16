@@ -51,7 +51,12 @@ pkg="$output/Overseer-Computer-Use.pkg"
 zip="$output/Overseer-Computer-Use.zip"
 [[ -d "$app" ]] || fail "release app was not produced"
 
-pkgbuild --component "$app" --install-location /Applications --sign "$installer_identity" "$pkg"
+component_plist="$output/component.plist"
+pkgbuild --analyze --component "$app" "$component_plist"
+/usr/libexec/PlistBuddy -c 'Set :0:BundleIsRelocatable false' "$component_plist"
+pkgbuild --component "$app" --component-plist "$component_plist" \
+  --install-location /Applications --sign "$installer_identity" "$pkg"
+rm -f "$component_plist"
 xcrun notarytool submit "$pkg" --keychain-profile "$notary_profile" --wait
 xcrun stapler staple "$pkg"
 xcrun stapler validate "$pkg"
