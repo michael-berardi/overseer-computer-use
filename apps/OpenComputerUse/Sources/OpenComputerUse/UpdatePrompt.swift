@@ -8,9 +8,9 @@ enum NativeUpdatePrompt {
         guard Bundle.main.bundleURL.pathExtension == "app" else { return }
         let updater = OverseerUpdater()
         updater.checkLatest { result in
-            guard case let .success(release) = result,
-                  isNewer(release.tagName, than: resolvedOpenComputerUseVersion()) else { return }
             Task { @MainActor in
+                guard case let .success(release) = result,
+                      isNewer(release.tagName, than: resolvedOpenComputerUseVersion()) else { return }
                 if updater.installAutomatically {
                     updater.downloadAndInstall(release: release, automatic: true) { result in
                         guard case .success = result else { return }
