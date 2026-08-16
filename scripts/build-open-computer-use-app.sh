@@ -421,6 +421,8 @@ cat > "${contents_dir}/Info.plist" <<PLIST
   <true/>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>Overseer Computer Use reads onscreen pixels only while an agent tool call is active.</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
 </dict>

@@ -227,8 +227,11 @@ extension PermissionWindowController: PermissionContentControllerDelegate {
         didRequestPermission permission: SystemPermissionKind,
         sourceFrameInScreen: CGRect?
     ) {
-        if permission == .accessibility {
+        switch permission {
+        case .accessibility:
             PermissionSupport.requestAccessibilityPrompt()
+        case .screenRecording:
+            PermissionSupport.requestScreenRecordingPrompt()
         }
 
         PermissionSupport.openSystemSettings(for: permission)
@@ -650,10 +653,6 @@ final class GuidancePlaceholderView: NSView {
 final class PermissionAccessoryPanelController {
     private let onBack: () -> Void
     private let trackingInterval: TimeInterval = 0.15
-    private let launchAnimationDuration: TimeInterval = 0.72
-    private let launchAnimationResponse = 0.72
-    private let launchAnimationDampingFraction = 1.0
-    private let launchInitialAlpha: CGFloat = 0.9
     private var panel: NSPanel?
     private var currentPermission: SystemPermissionKind?
     private var workspaceObserver: NSObjectProtocol?
@@ -663,12 +662,6 @@ final class PermissionAccessoryPanelController {
     private var trackingTimer: Timer?
     private var pendingSourceFrameInScreen: CGRect?
     private var didPresentCurrentPanel = false
-    private var launchDisplayLink: CADisplayLink?
-    private var launchStartTime: CFTimeInterval = 0
-    private var launchFromFrame = NSRect.zero
-    private var launchToFrame = NSRect.zero
-    private var isAnimatingLaunch = false
-    private var launchSettleGeneration = 0
 
     private enum Layout {
         static let panelWidth: CGFloat = 530
@@ -715,7 +708,6 @@ final class PermissionAccessoryPanelController {
     }
 
     func hide() {
-        stopLaunchAnimation()
         stopTrackingTimer()
         removeObservers()
         panel?.orderOut(nil)
@@ -828,7 +820,6 @@ final class PermissionAccessoryPanelController {
         }
 
         guard isSystemSettingsFrontmost, let windowContext = systemSettingsWindowContext() else {
-            stopLaunchAnimation()
             panel.orderOut(nil)
             return
         }
@@ -861,10 +852,6 @@ final class PermissionAccessoryPanelController {
             return
         }
 
-        if isAnimatingLaunch {
-            launchToFrame.origin = origin
-            return
-        }
 
         if panel.frame.origin != origin {
             panel.setFrameOrigin(origin)
@@ -873,7 +860,7 @@ final class PermissionAccessoryPanelController {
 
     private func presentPanel(
         panel: NSPanel,
-        from sourceFrameInScreen: CGRect?,
+        from _: CGRect?,
         relativeTo windowContext: SystemSettingsWindowContext
     ) {
         guard let targetOrigin = preferredPanelOrigin(
@@ -883,144 +870,12 @@ final class PermissionAccessoryPanelController {
             return
         }
 
-        let targetFrame = NSRect(origin: targetOrigin, size: panel.frame.size)
         orderedWindowNumber = windowContext.windowNumber
-
-        guard let sourceFrameInScreen, sourceFrameInScreen.isEmpty == false else {
-            stopLaunchAnimation()
-            panel.alphaValue = 1
-            panel.setFrame(targetFrame, display: false)
-            panel.order(.above, relativeTo: windowContext.windowNumber)
-            return
-        }
-
-        stopLaunchAnimation()
-        isAnimatingLaunch = true
-        launchFromFrame = sourceFrameInScreen
-        launchToFrame = targetFrame
-        launchStartTime = CACurrentMediaTime()
-        launchSettleGeneration += 1
-
-        panel.alphaValue = launchInitialAlpha
-        panel.setFrame(sourceFrameInScreen, display: false)
+        panel.alphaValue = 1
+        panel.setFrame(NSRect(origin: targetOrigin, size: panel.frame.size), display: true)
         panel.order(.above, relativeTo: windowContext.windowNumber)
-        stepLaunchAnimation()
-
-        let displayLink = panel.displayLink(target: self, selector: #selector(displayLinkDidFire(_:)))
-        displayLink.add(to: .main, forMode: .common)
-        launchDisplayLink = displayLink
-        scheduleLaunchSettlePasses(for: launchSettleGeneration)
     }
 
-    @objc
-    private func displayLinkDidFire(_ displayLink: CADisplayLink) {
-        stepLaunchAnimation()
-    }
-
-    private func stepLaunchAnimation() {
-        guard let panel else {
-            stopLaunchAnimation()
-            return
-        }
-
-        let elapsed = max(0, CACurrentMediaTime() - launchStartTime)
-        if elapsed >= launchAnimationDuration {
-            isAnimatingLaunch = false
-            stopLaunchAnimation()
-            panel.alphaValue = 1
-            updateLaunchTargetFrameIfNeeded()
-            panel.setFrame(launchToFrame, display: true)
-            if let orderedWindowNumber {
-                panel.order(.above, relativeTo: orderedWindowNumber)
-            }
-            return
-        }
-
-        let progress = springProgress(at: elapsed)
-        panel.alphaValue = launchInitialAlpha + ((1 - launchInitialAlpha) * progress)
-        panel.setFrame(curvedFrame(from: launchFromFrame, to: launchToFrame, progress: progress), display: true)
-        if let orderedWindowNumber {
-            panel.order(.above, relativeTo: orderedWindowNumber)
-        }
-    }
-
-    private func stopLaunchAnimation() {
-        isAnimatingLaunch = false
-        launchDisplayLink?.invalidate()
-        launchDisplayLink = nil
-    }
-
-    private func updateLaunchTargetFrameIfNeeded() {
-        guard
-            let panel,
-            let windowContext = systemSettingsWindowContext(),
-            let origin = preferredPanelOrigin(for: panel.frame.size, windowBounds: windowContext.bounds)
-        else {
-            return
-        }
-
-        orderedWindowNumber = windowContext.windowNumber
-        launchToFrame = NSRect(origin: origin, size: panel.frame.size)
-    }
-
-    private func scheduleLaunchSettlePasses(for generation: Int) {
-        let delays: [TimeInterval] = [0.18, 0.42, 0.84, 1.2]
-
-        for delay in delays {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                Task { @MainActor [weak self] in
-                    guard let self, self.currentPermission != nil, self.launchSettleGeneration == generation else {
-                        return
-                    }
-                    self.updatePanelVisibility()
-                    self.refreshPosition()
-                }
-            }
-        }
-    }
-
-    private func springProgress(at elapsed: TimeInterval) -> CGFloat {
-        let omega = (2 * Double.pi) / launchAnimationResponse
-        let t = max(0, elapsed)
-        let progress: Double
-
-        if abs(launchAnimationDampingFraction - 1) < 0.0001 {
-            progress = 1 - exp(-omega * t) * (1 + (omega * t))
-        } else {
-            progress = min(1, t / launchAnimationDuration)
-        }
-
-        return min(max(progress, 0), 1)
-    }
-
-    private func curvedFrame(from: NSRect, to: NSRect, progress: CGFloat) -> NSRect {
-        let size = NSSize(
-            width: from.size.width + ((to.size.width - from.size.width) * progress),
-            height: from.size.height + ((to.size.height - from.size.height) * progress)
-        )
-
-        let startCenter = CGPoint(x: from.midX, y: from.midY)
-        let endCenter = CGPoint(x: to.midX, y: to.midY)
-        let midPoint = CGPoint(
-            x: (startCenter.x + endCenter.x) * 0.5,
-            y: max(startCenter.y, endCenter.y)
-        )
-        let distance = hypot(endCenter.x - startCenter.x, endCenter.y - startCenter.y)
-        let lift = min(140, max(44, distance * 0.18))
-        let controlPoint = CGPoint(x: midPoint.x, y: midPoint.y + lift)
-        let inverse = 1 - progress
-        let center = CGPoint(
-            x: (inverse * inverse * startCenter.x) + (2 * inverse * progress * controlPoint.x) + (progress * progress * endCenter.x),
-            y: (inverse * inverse * startCenter.y) + (2 * inverse * progress * controlPoint.y) + (progress * progress * endCenter.y)
-        )
-
-        return NSRect(
-            x: center.x - (size.width * 0.5),
-            y: center.y - (size.height * 0.5),
-            width: size.width,
-            height: size.height
-        )
-    }
 
     private func preferredPanelOrigin(
         for panelSize: CGSize,
@@ -1164,6 +1019,7 @@ final class PermissionAccessoryPanelView: NSView {
         materialView.layer?.masksToBounds = true
         materialView.layer?.borderWidth = 0.5
         materialView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.18).cgColor
+        instructionLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(materialView)
 
         let tintView = NSView()

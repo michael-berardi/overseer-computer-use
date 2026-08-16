@@ -52,6 +52,46 @@ public final class ComputerUseToolDispatcher {
 
     public func callTool(name: String, arguments: [String: Any]) throws -> ToolCallResult {
         try ToolSchemaValidator.validate(tool: name, arguments: arguments)
+        return try dispatchTool(name: name, arguments: arguments)
+    }
+
+    public func callToolAsResult(name: String, arguments: [String: Any]) -> ToolCallResult {
+        callToolAsResult(name: name, arguments: arguments, callIndex: nil)
+    }
+
+    func callToolAsResult(name: String, arguments: [String: Any], callIndex: Int?) -> ToolCallResult {
+        do {
+            try ToolSchemaValidator.validate(tool: name, arguments: arguments)
+        } catch {
+            let info = computerUseErrorInfo(for: error, phase: .preflight, callIndex: callIndex)
+            let result = ToolCallResult.text(info.message, errorInfo: info)
+            telemetry.recordToolResult(toolName: name, succeeded: false)
+            return result
+        }
+
+        return callValidatedToolAsResult(name: name, arguments: arguments, callIndex: callIndex)
+    }
+
+    /// Executes a call after schema validation has already completed. Sequence
+    /// execution uses this after its all-calls preflight, avoiding another
+    /// identical validation pass while preserving the public dispatch contract.
+    fileprivate func callValidatedToolAsResult(
+        name: String,
+        arguments: [String: Any],
+        callIndex: Int?
+    ) -> ToolCallResult {
+        let result: ToolCallResult
+        do {
+            result = try dispatchTool(name: name, arguments: arguments)
+        } catch {
+            let info = computerUseErrorInfo(for: error, phase: .execute, callIndex: callIndex)
+            result = ToolCallResult.text(info.message, errorInfo: info)
+        }
+        telemetry.recordToolResult(toolName: name, succeeded: !result.isError)
+        return result
+    }
+
+    private func dispatchTool(name: String, arguments: [String: Any]) throws -> ToolCallResult {
         let stateID = optionalString("state_id", in: arguments)
 
         switch name {
@@ -124,31 +164,6 @@ public final class ComputerUseToolDispatcher {
         default:
             throw ComputerUseError.unsupportedTool(name)
         }
-    }
-
-    public func callToolAsResult(name: String, arguments: [String: Any]) -> ToolCallResult {
-        callToolAsResult(name: name, arguments: arguments, callIndex: nil)
-    }
-
-    func callToolAsResult(name: String, arguments: [String: Any], callIndex: Int?) -> ToolCallResult {
-        do {
-            try ToolSchemaValidator.validate(tool: name, arguments: arguments)
-        } catch {
-            let info = computerUseErrorInfo(for: error, phase: .preflight, callIndex: callIndex)
-            let result = ToolCallResult.text(info.message, errorInfo: info)
-            telemetry.recordToolResult(toolName: name, succeeded: false)
-            return result
-        }
-
-        let result: ToolCallResult
-        do {
-            result = try callTool(name: name, arguments: arguments)
-        } catch {
-            let info = computerUseErrorInfo(for: error, phase: .execute, callIndex: callIndex)
-            result = ToolCallResult.text(info.message, errorInfo: info)
-        }
-        telemetry.recordToolResult(toolName: name, succeeded: !result.isError)
-        return result
     }
 
     private func requireString(_ key: String, in arguments: [String: Any]) throws -> String {
@@ -381,7 +396,7 @@ public func runOpenComputerUseCall(
             )
         }
 
-        let result = dispatcher.callToolAsResult(name: toolName, arguments: arguments)
+        let result = dispatcher.callValidatedToolAsResult(name: toolName, arguments: arguments, callIndex: nil)
         return OpenComputerUseCallOutput(
             jsonObject: result.asDictionary,
             hasToolError: result.isError,
@@ -407,7 +422,7 @@ public func runOpenComputerUseCall(
         var firstErrorInfo: ComputerUseErrorInfo?
 
         for (index, call) in calls.enumerated() {
-            let result = dispatcher.callToolAsResult(name: call.tool, arguments: call.arguments, callIndex: index)
+            let result = dispatcher.callValidatedToolAsResult(name: call.tool, arguments: call.arguments, callIndex: index)
             outputs.append([
                 "tool": call.tool,
                 "result": result.asDictionary,

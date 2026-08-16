@@ -159,6 +159,10 @@ public enum PermissionSupport {
         let options: NSDictionary = ["AXTrustedCheckOptionPrompt": true]
         _ = AXIsProcessTrustedWithOptions(options)
     }
+    public static func requestScreenRecordingPrompt() {
+        _ = CGRequestScreenCaptureAccess()
+    }
+
 
     static func preferredPermissionAppBundleURL(
         preferredInstalledBundleURL: URL?,
