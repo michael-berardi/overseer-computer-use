@@ -51,20 +51,9 @@ overseer computer-use telemetry status       # inspect opt-in state; enable/disa
 
 Supported tools: `list_apps`, `get_app_state`, `click`, `perform_secondary_action`, `scroll`, `drag`, `type_text`, `press_key`, and `set_value`. Use `--help` for all options.
 
-## Updates, uninstall, and diagnostics
+## Updates and local transport
 
 Stable update metadata is checked at launch and at most once per UTC day. The prompt offers **Update now**, **Later**, and **Install updates automatically**. Automatic installation is opt-in. Every candidate must pass SHA-256, Developer ID Application identity, bundle identifier/team/designated requirement, and notarization checks before an atomic replace. The previous app is retained until replacement succeeds; failed replacement rolls back and leaves the running install unchanged.
-
-```bash
-# Check installed identity and permissions
-overseer computer-use doctor --json
-# Download and apply the latest verified release (interactive prompt is preferred)
-overseer computer-use update
-# Remove app, command shim, and host configuration
-overseer computer-use uninstall
-# Print local socket and signing diagnostics
-overseer computer-use diagnostics
-```
 
 The Unix socket used between the command shim and the signed app agent lives in the user's temporary directory, is created with owner-only permissions, and is authenticated by a per-request nonce. It accepts local same-user clients only; it is not a network listener. Tool payloads stay local.
 
