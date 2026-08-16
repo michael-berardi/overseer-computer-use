@@ -85,7 +85,8 @@ case "$candidate_signature" in
 esac
 candidate_requirement="$(codesign -dr - "$candidate_app" 2>&1 || true)"
 [[ "$candidate_requirement" == *'identifier "com.libertydesignstudio.overseer-computer-use"'* &&
-   "$candidate_requirement" == *'certificate leaf[subject.OU] = "T63VT9UAY2"'* ]] || { echo "candidate app has an unstable designated requirement" >&2; exit 1; }
+   ( "$candidate_requirement" == *'certificate leaf[subject.OU] = T63VT9UAY2'* ||
+     "$candidate_requirement" == *'certificate leaf[subject.OU] = "T63VT9UAY2"'* ) ]] || { echo "candidate app has an unstable designated requirement" >&2; exit 1; }
 spctl -a -vv -t exec "$candidate_app" >/dev/null
 app="/Applications/Overseer Computer Use.app"
 sudo installer -pkg "$pkg" -target /
@@ -96,7 +97,8 @@ case "$app_signature" in
 esac
 app_requirement="$(codesign -dr - "$app" 2>&1 || true)"
 if [[ "$app_requirement" != *'identifier "com.libertydesignstudio.overseer-computer-use"'* ||
-      "$app_requirement" != *'certificate leaf[subject.OU] = "T63VT9UAY2"'* ]]; then
+      ( "$app_requirement" != *'certificate leaf[subject.OU] = T63VT9UAY2'* &&
+        "$app_requirement" != *'certificate leaf[subject.OU] = "T63VT9UAY2"'* ) ]]; then
   echo "installed app has an unstable designated requirement" >&2
   exit 1
 fi

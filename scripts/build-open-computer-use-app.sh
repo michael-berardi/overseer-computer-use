@@ -286,7 +286,8 @@ verify_release_signing() {
   local requirement
   requirement="$(codesign -dr - "${app_path}" 2>&1 || true)"
   if [[ "${requirement}" != *'identifier "com.libertydesignstudio.overseer-computer-use"'* ||
-        "${requirement}" != *"certificate leaf[subject.OU] = \"${team_identifier}\""* ]]; then
+        ( "${requirement}" != *"certificate leaf[subject.OU] = ${team_identifier}"* &&
+          "${requirement}" != *"certificate leaf[subject.OU] = \"${team_identifier}\""* ) ]]; then
     echo "Release designated requirement must bind bundle com.libertydesignstudio.overseer-computer-use to team ${team_identifier}." >&2
     exit 1
   fi
