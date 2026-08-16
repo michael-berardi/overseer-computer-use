@@ -25,13 +25,34 @@ enum OpenComputerUseMain {
     @MainActor
     private static func run() throws {
         let arguments = Array(CommandLine.arguments.dropFirst())
-
         if MacOSAppAgentProxy.isAgentInvocation(arguments: arguments) {
+            TelemetryCoordinator().start()
+            if TelemetryStore().consent != .undecided {
+                NativeUpdatePrompt.checkAtLaunch()
+            }
+            OverseerUpdater.confirmSuccessfulLaunch()
             try MacOSAppAgentProxy.runAgent(arguments: arguments)
             return
         }
 
         let command = try parseOpenComputerUseCLI(arguments: arguments)
+        if case let .telemetry(action) = command {
+            let store = TelemetryStore()
+            switch action {
+            case .status:
+                print(store.consent.rawValue)
+            case .enable:
+                _ = store.optIn()
+                print("optedIn")
+            case .disable:
+                store.disable()
+                print("declined")
+            }
+            return
+        }
+
+        TelemetryCoordinator().start()
+
 
         if MacOSAppAgentProxy.shouldProxy(command: command) {
             exit(try MacOSAppAgentProxy.runProxy(command: command, arguments: arguments))
@@ -58,6 +79,8 @@ enum OpenComputerUseMain {
             if !statusOnly, !permissions.missingPermissions.isEmpty {
                 PermissionOnboardingApp.launch()
             }
+        case .telemetry:
+            break
         case .listApps:
             let service = ComputerUseService()
             print(service.listApps().primaryText ?? "")

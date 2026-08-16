@@ -41,7 +41,6 @@ struct SoftwareCursorGlyphRenderState {
 enum SoftwareCursorGlyphMetrics {
     static let windowSize = CGSize(width: 126, height: 126)
     static let tipAnchor = CGPoint(x: 60.35, y: 70.3)
-    static let referenceImageResourceName = "official-software-cursor-window-252"
 
     static let pointerSize = CGSize(width: 21, height: 21)
     static let pointerOffset = CGPoint(x: 2.6, y: -3.2)
@@ -56,24 +55,12 @@ private enum SoftwareCursorGlyphColors {
 }
 
 enum SoftwareCursorGlyphRenderer {
-    private static let referenceImage = loadReferenceCursorWindowImage()
-
     static func draw(
         in bounds: CGRect,
         context: CGContext,
         state: SoftwareCursorGlyphRenderState
     ) {
         let drawingState = state.appKitDrawingState
-
-        if let referenceImage {
-            drawReferenceImage(
-                referenceImage,
-                in: bounds,
-                context: context,
-                state: drawingState
-            )
-            return
-        }
 
         let pulse = drawingState.clickProgress
         let fogCenter = CGPoint(
@@ -270,24 +257,3 @@ enum SoftwareCursorGlyphRenderer {
     }
 }
 
-func loadReferenceCursorWindowImage() -> NSImage? {
-    if let bundledReference = Bundle.main.url(
-        forResource: SoftwareCursorGlyphMetrics.referenceImageResourceName,
-        withExtension: "png"
-    ), let image = NSImage(contentsOf: bundledReference) {
-        return image
-    }
-
-    let fileURL = URL(fileURLWithPath: #filePath).standardizedFileURL
-    let repoRoot = fileURL
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-
-    let referenceURL = repoRoot
-        .appendingPathComponent("docs/references/codex-computer-use-reverse-engineering/assets/extracted-2026-04-19/\(SoftwareCursorGlyphMetrics.referenceImageResourceName).png")
-
-    return NSImage(contentsOf: referenceURL)
-}

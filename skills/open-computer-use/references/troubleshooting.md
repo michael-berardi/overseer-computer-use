@@ -1,4 +1,4 @@
-# Open Computer Use Troubleshooting
+# Overseer Computer Use Troubleshooting
 
 Read this reference when setup, permission checks, app discovery, snapshots, or actions fail.
 
@@ -10,16 +10,16 @@ The macOS runtime requires macOS 14.0 or later. Check the host version before tr
 sw_vers -productVersion
 ```
 
-On macOS versions earlier than 14.0, the binary cannot launch and may report a `dyld` or minimum-version incompatibility. `open-computer-use doctor`, Accessibility authorization, and Screen Recording authorization cannot resolve this error. Upgrade macOS or run Open Computer Use on a supported macOS, Windows, or Linux desktop.
+On macOS versions earlier than 14.0, the binary cannot launch and may report a `dyld` or minimum-version incompatibility. `overseer computer-use doctor`, Accessibility authorization, and Screen Recording authorization cannot resolve this error. Upgrade macOS or run Overseer Computer Use on a supported macOS, Windows, or Linux desktop.
 
 ## First Checks
 
 Start with:
 
 ```sh
-open-computer-use -h
-open-computer-use doctor
-open-computer-use call list_apps
+overseer computer-use --help
+overseer computer-use doctor
+overseer computer-use call list_apps
 ```
 
 On macOS 14.0 or later, `doctor` reports Accessibility and Screen Recording status. If either is missing, ask the user to approve the onboarding UI.
@@ -28,10 +28,10 @@ On macOS 14.0 or later, `doctor` reports Accessibility and Screen Recording stat
 
 If `get_app_state` cannot find an app:
 
-1. Run `open-computer-use call list_apps`.
+1. Run `overseer computer-use call list_apps`.
 2. Use the app name or bundle identifier from that result.
 3. Confirm the app is running and has a visible, non-minimized window.
-4. On macOS, rerun `open-computer-use doctor`.
+4. On macOS, rerun `overseer computer-use doctor`.
 
 Do not silently switch to a different app when the requested target is not available.
 
@@ -54,10 +54,10 @@ Snapshot text is limited to 500 characters by default. If a visible chat message
 Request a larger or unlimited text limit explicitly:
 
 ```sh
-open-computer-use call get_app_state --args '{"app":"TextEdit","text_limit":1000}'
-open-computer-use call get_app_state --args '{"app":"TextEdit","text_limit":"max"}'
-open-computer-use snapshot --text-limit 1000 TextEdit
-open-computer-use snapshot --text-limit max TextEdit
+overseer computer-use call get_app_state --args '{"app":"TextEdit","text_limit":1000}'
+overseer computer-use call get_app_state --args '{"app":"TextEdit","text_limit":"max"}'
+overseer computer-use snapshot --text-limit 1000 TextEdit
+overseer computer-use snapshot --text-limit max TextEdit
 ```
 
 `text_limit: "max"` only disables the text character limit. It does not remove the default 1200 node count limit, 64 level tree depth limit, screenshot size, permission, or desktop-session protections.
@@ -69,8 +69,8 @@ If the screenshot clearly shows more visible content than the accessibility tree
 Request a larger tree budget explicitly:
 
 ```sh
-open-computer-use call get_app_state --args '{"app":"Google Chrome","max_tree_nodes":3000,"max_tree_depth":96}'
-open-computer-use snapshot --max-tree-nodes 3000 --max-tree-depth 96 "Google Chrome"
+overseer computer-use call get_app_state --args '{"app":"Google Chrome","max_tree_nodes":3000,"max_tree_depth":96}'
+overseer computer-use snapshot --max-tree-nodes 3000 --max-tree-depth 96 "Google Chrome"
 ```
 
 Increasing the tree budget does not change text truncation, screenshot limits, permissions, or desktop-session requirements.

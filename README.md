@@ -1,183 +1,79 @@
-# open-computer-use
+# Overseer Computer Use
 
-[![English](https://img.shields.io/badge/English-Click-yellow)](./README.md)
-[![简体中文](https://img.shields.io/badge/简体中文-点击查看-orange)](./README.zh-CN.md)
-[![Release](https://img.shields.io/github/v/release/iFurySt/open-codex-computer-use)](https://github.com/iFurySt/open-codex-computer-use/releases)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/iFurySt/open-codex-computer-use)
-<a href="https://llmapis.com?source=https%3A%2F%2Fgithub.com%2FiFurySt%2Fopen-codex-computer-use" target="_blank"><img src="https://llmapis.com/api/badge/iFurySt/open-codex-computer-use" alt="LLMAPIS" width="20" /></a>
+Overseer Computer Use is a local, open-source Computer Use runtime for supported AI agents. It exposes a stdio MCP server and a small command line interface; automation runs on the user's machine and never requires a hosted dashboard.
 
-> [!TIP]
-> Interested in Browser Use? Check out [open-browser-use](https://github.com/iFurySt/open-codex-browser-use).
+## Install
 
----
+### macOS release installer
 
-`open-computer-use` is an open-source `Computer Use` service wrapped as `MCP`. Any AI agent or MCP client can use it to run Computer Use on macOS, Linux, and Windows.
-
-This project was inspired by OpenAI's [Codex Computer Use](https://openai.com/index/codex-for-almost-everything/). It showed that non-intrusive CUA can be built on top of Accessibility, so I decided to build an open-source version.
-
-I started this repo with my [harness template](https://github.com/iFurySt/harness-template), a template for quickly spinning up AI-first projects. It has been one of our most useful workflows lately, especially for nearly 100% AI-generated projects. I also wrote [a post](https://www.ifuryst.com/blog/2026/speedrunning-the-ai-era/) about the methodology behind it.
-
-## Demos
-
-### Codex App and Codex CLI
-
-[![Open Computer Use custom demo cover](./docs/generated/readme-assets/open-computer-use-demo-cover.png)](https://youtu.be/2s6aVpGiwaQ)
-
-<sub><em>`open-computer-use` used as Computer Use in Codex App and Codex CLI, matching the official experience.</em></sub>
-
-### Gemini CLI
-
-https://github.com/user-attachments/assets/eacb3b15-f939-46c7-b3b3-6f876977a58d
-
-<sub><em>Gemini CLI connects to `open-computer-use` through MCP and runs full Computer Use actions.</em></sub>
-
-### Linux
-
-https://github.com/user-attachments/assets/e036b1c8-2200-4896-abd4-19225915cf66
-
-<sub><em>`open-computer-use` running on Linux.</em></sub>
-
-## Quick Start
+Prerequisites: macOS 14 or later, an Apple Silicon or Intel Mac, an interactive logged-in desktop session, and an agent that supports MCP/stdio. The public installer is a signed and notarized `Overseer-Computer-Use.pkg` from the latest stable release.
 
 ```bash
-npm i -g open-computer-use
+curl -fsSL https://raw.githubusercontent.com/michael-berardi/overseer-computer-use/main/scripts/install-overseer-computer-use.sh | bash
 ```
 
-The npm package also exposes `ocu` as the short CLI alias.
+The installer downloads the latest stable package and its SHA-256 manifest, verifies the checksum before invoking `installer`, and places the app at `/Applications/Overseer Computer Use.app`. It never accepts an unsigned or ad-hoc release. For a local checkout, run `./scripts/install-overseer-computer-use.sh --local dist/Overseer\ Computer\ Use.pkg`.
 
-> [!IMPORTANT]
-> The macOS runtime requires macOS 14.0 or later.
+### Agent setup
 
-**On macOS, run it once and grant `Accessibility` and `Screen Recording`. Windows and Linux do not need this step.**
+The installer places a generic `overseer` command in `~/.local/bin`. Add that directory to `PATH`, then run:
 
 ```bash
-open-computer-use
-# or
-ocu
+overseer computer-use doctor
+# Start the stdio MCP server for any MCP-capable agent:
+overseer computer-use mcp
 ```
 
-Before using it, install it into your agent:
+
+(There is no agent-specific integration requirement. Configure your host's MCP entry with command `overseer` and arguments `["computer-use", "mcp"]`.)
+
+## Permissions and first run
 
 ```bash
-# Install into Codex by writing to ~/.codex/config.toml
-open-computer-use install-codex-mcp
+overseer computer-use doctor
 ```
 
-Or add it to your own client manually:
+The app shows a dark control-room onboarding window with truthful Accessibility and Screen & System Audio Recording cards. Choose **Allow** to request the corresponding macOS API and open System Settings. A card becomes **READY** only after macOS preflight/TCC reports the grant; opening a settings pane is never treated as success. Refresh happens while the window is active. The new bundle identity requires one final grant after upgrading from a legacy build; it then remains stable across installs and verified updates.
 
-```json
-{
-  "mcpServers": {
-    "open-computer-use": {
-      "command": "open-computer-use",
-      "args": ["mcp"]
-    }
-  }
-}
-```
+The first run also asks whether to **Share anonymous usage** or choose **No thanks**. Declining is silent and persistent. Run `overseer computer-use telemetry status|enable|disable` at any time; disabling deletes the local identifier, queued counters, and cadence markers.
 
-### Skill
-
-Install the skill directly:
+## Commands
 
 ```bash
-# Install for Codex
-npx skills add iFurySt/open-codex-computer-use -g -a codex --skill open-computer-use -y
-npx skills ls -g -a codex | rg 'open-computer-use'
+overseer computer-use doctor                 # permissions and local trust diagnostics
+overseer computer-use list-apps              # targetable running/recent apps
+overseer computer-use tools                  # supported tool catalog
+overseer computer-use snapshot TextEdit      # read-only accessibility state
+overseer computer-use call get_app_state --args '{"app":"TextEdit"}'
+overseer computer-use mcp                    # stdio MCP transport
+overseer computer-use telemetry status       # inspect opt-in state; enable/disable explicitly
 ```
 
-Install for Claude Code:
+Supported tools: `list_apps`, `get_app_state`, `click`, `perform_secondary_action`, `scroll`, `drag`, `type_text`, `press_key`, and `set_value`. Use `--help` for all options.
+
+## Updates, uninstall, and diagnostics
+
+Stable update metadata is checked at launch and at most once per UTC day. The prompt offers **Update now**, **Later**, and **Install updates automatically**. Automatic installation is opt-in. Every candidate must pass SHA-256, Developer ID Application identity, bundle identifier/team/designated requirement, and notarization checks before an atomic replace. The previous app is retained until replacement succeeds; failed replacement rolls back and leaves the running install unchanged.
 
 ```bash
-npx skills add iFurySt/open-codex-computer-use -g -a claude-code --skill open-computer-use -y
+# Check installed identity and permissions
+overseer computer-use doctor --json
+# Download and apply the latest verified release (interactive prompt is preferred)
+overseer computer-use update
+# Remove app, command shim, and host configuration
+overseer computer-use uninstall
+# Print local socket and signing diagnostics
+overseer computer-use diagnostics
 ```
 
-Update an existing global install, including the Codex install created above:
+The Unix socket used between the command shim and the signed app agent lives in the user's temporary directory, is created with owner-only permissions, and is authenticated by a per-request nonce. It accepts local same-user clients only; it is not a network listener. Tool payloads stay local.
 
-```bash
-npx skills update open-computer-use -g -y
-```
+## Privacy and security
 
-You can also manually download and install the
-[`open-computer-use` skill](./skills/open-computer-use).
+Telemetry is opt-in only. Before consent, there is no network request and no install UUID. Opt-in payloads use schema `lds.app-telemetry.event.v2` and contain only the app key, event (`launch`, `heartbeat`, or `usage`), random install UUID, semver, coarse platform/architecture, UTC day, and the fixed Computer Use counters. Usage events additionally carry a lowercase UUIDv4 `batchId`; launch and heartbeat events never do. Usage counters are persisted in an immutable in-flight batch for retries, while later counters accrue separately. No prompts, screenshots, coordinates, app/window names, arguments, paths, command text, user content, raw IP/UA, secrets, or hardware identifiers are sent. Identifier rows expire within 34 UTC days; ID-free daily totals within 360 days. Failures are silent and never block tools. See [`SECURITY.md`](./SECURITY.md) and [`docs/SECURITY.md`](./docs/SECURITY.md).
 
-## More
+Computer Use can control visible applications after the user grants macOS permissions. It does not bypass TCC, cannot guarantee equivalent background input for every toolkit, and does not promise cross-compositor parity on experimental Linux/Windows runtimes. Coordinate actions can be affected by a window moving between snapshot and action; refresh state before retrying.
 
-Besides the MCP JSON config above, you can also use the built-in commands:
+## Source lineage and license
 
-```bash
-# Install into Codex by writing to ~/.codex/config.toml
-open-computer-use install-codex-mcp
-ocu install-codex-mcp
-
-# Install as a Codex plugin, mainly for Codex App
-open-computer-use install-codex-plugin
-
-# Install into Claude Code by writing to ~/.claude.json
-open-computer-use install-claude-mcp
-
-# Install into Gemini CLI for the current project by writing to ./.gemini/settings.json
-open-computer-use install-gemini-mcp
-
-# Install into Gemini CLI user config instead
-open-computer-use install-gemini-mcp --scope user
-
-# Install into opencode by writing to ~/.config/opencode/opencode.json (or the active config file)
-open-computer-use install-opencode-mcp
-
-# Call a single Computer Use tool and print the MCP-style JSON result
-open-computer-use call list_apps
-ocu call list_apps
-open-computer-use call get_app_state --args '{"app":"TextEdit"}'
-
-# Run a sequence in one process so element_index state can be reused
-# Sequence runs sleep 1s between successful operations by default
-open-computer-use call --calls '[{"tool":"get_app_state","args":{"app":"TextEdit"}},{"tool":"press_key","args":{"app":"TextEdit","key":"Return"}}]'
-open-computer-use call --calls-file examples/textedit-overlay-seq.json --sleep 0.5
-
-# Check permissions; onboarding only opens when something is missing
-open-computer-use doctor
-
-# Build, notarize, and install one stable local app identity. Replacing an
-# authorized ad-hoc copy with a differently signed build requires new grants.
-OPEN_COMPUTER_USE_NOTARYTOOL_PROFILE=your-notary-profile \
-OPEN_COMPUTER_USE_INSTALL_APP_PATH="$HOME/Applications/Open Computer Use.app" \
-./scripts/build-open-computer-use-app.sh release
-
-# Run local validation from a source checkout
-make smoke
-OPEN_COMPUTER_USE_STRESS_LOOPS=20 make stress
-make agent-smoke
-make agent-smoke SCENARIO=fixture-full
-node ./scripts/run-agent-smoke-tests.mjs --agents=claude,codex --command=open-computer-use
-node ./scripts/run-agent-smoke-tests.mjs --scenario=fixture --agents=claude,codex --command=open-computer-use
-node ./scripts/run-agent-smoke-tests.mjs --scenario=fixture-full --agents=claude,codex --command=open-computer-use
-OPEN_COMPUTER_USE_HERMES_PROVIDER=anthropic OPEN_COMPUTER_USE_HERMES_MODEL=claude-opus-4-20250514 make agent-smoke AGENTS=hermes SCENARIO=fixture-full
-node ./scripts/run-agent-smoke-tests.mjs --agents=hermes --hermes-provider=anthropic --hermes-model=claude-opus-4-20250514
-node ./scripts/run-agent-smoke-tests.mjs --scenario=fixture --agents=hermes --hermes-provider=anthropic --hermes-model=claude-opus-4-20250514
-node ./scripts/run-agent-smoke-tests.mjs --scenario=fixture-full --agents=hermes --hermes-provider=anthropic --hermes-model=claude-opus-4-20250514 --hermes-max-turns=12
-
-# Show help
-open-computer-use -h
-ocu -h
-```
-
-## Cursor Motion
-
-Cursor Motion is an open-source cursor motion system for macOS, based on public information shared by members of the Software.Inc team. You can download the app from the [Releases page](https://github.com/iFurySt/open-codex-computer-use/releases).
-
-[![Cursor Motion custom demo cover](./docs/generated/readme-assets/cursor-motion-demo-cover.png)](https://youtu.be/KRUq5GUHv1Q)
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=iFurySt%2Fopen-codex-computer-use&type=date&legend=top-left">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=ifuryst/open-codex-computer-use&type=date&theme=dark&legend=top-left" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=ifuryst/open-codex-computer-use&type=date&legend=top-left" />
-    <img alt="Star History Chart for open-computer-use" src="https://api.star-history.com/chart?repos=ifuryst/open-codex-computer-use&type=date&legend=top-left" />
-  </picture>
-</a>
-
-## License
-
-[MIT](./LICENSE). Third-party attribution is listed in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
+This repository began from the open `iFurySt/open-codex-computer-use` project and preserves its MIT license and upstream attribution. Overseer Computer Use diverges in product identity, permission onboarding, telemetry consent, signed update safety, packaging, and generic agent setup. Upstream source and commit lineage are documented in [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md). Maintainers should periodically review upstream changes, port relevant fixes with tests, and record intentional divergence; no proprietary app bundle or extracted artwork is required or shipped.

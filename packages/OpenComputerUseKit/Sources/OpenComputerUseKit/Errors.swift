@@ -132,7 +132,7 @@ public func computerUseErrorInfo(
             phase: phase,
             callIndex: callIndex,
             retryable: false,
-            hint: cliError.helpCommand.map { "run `open-computer-use help \($0)`" },
+            hint: cliError.helpCommand.map { "run `overseer computer-use help \($0)`" },
             message: cliError.message
         )
     }
@@ -163,7 +163,7 @@ public func computerUseErrorInfo(
             phase: phase,
             callIndex: callIndex,
             retryable: false,
-            hint: "run `open-computer-use tools` to list supported tools",
+            hint: "run `overseer computer-use tools` to list supported tools",
             candidates: ToolDefinitions.all.map(\.name),
             message: computerUseError.errorDescription ?? "unsupportedTool(\"\(name)\")"
         )
@@ -181,7 +181,7 @@ public func computerUseErrorInfo(
             phase: phase,
             callIndex: callIndex,
             retryable: true,
-            hint: "run `open-computer-use targets --running-only` to list running apps, then retry",
+            hint: "run `overseer computer-use targets --running-only` to list running apps, then retry",
             message: "appNotFound(\"\(app)\")"
         )
     case .ambiguousApp(let query, let candidates):
@@ -200,7 +200,7 @@ public func computerUseErrorInfo(
             phase: phase,
             callIndex: callIndex,
             retryable: false,
-            hint: "run `open-computer-use doctor` to review permissions",
+            hint: "run `overseer computer-use doctor` to review permissions",
             message: message
         )
     case .stateUnavailable(let message):

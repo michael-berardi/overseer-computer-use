@@ -13,7 +13,10 @@ const selectedAgents = new Set((args.get("agents") ?? process.env.OPEN_COMPUTER_
   .map((agent) => agent.trim())
   .filter(Boolean));
 const json = args.get("json") === "true";
-const command = args.get("command") ?? process.env.OPEN_COMPUTER_USE_AGENT_COMMAND ?? "open-computer-use";
+const command = args.get("command") ?? process.env.OPEN_COMPUTER_USE_AGENT_COMMAND ?? "overseer";
+const usesOverseerShim = command === "overseer" || command.endsWith("/overseer") || command.endsWith("\\overseer");
+const commandPrefix = usesOverseerShim ? ["computer-use"] : [];
+const commandArgs = [...commandPrefix, "mcp"];
 const timeoutMs = Number(args.get("timeout-ms") ?? process.env.OPEN_COMPUTER_USE_AGENT_TIMEOUT_MS ?? 120000);
 const maxClaudeBudget = args.get("claude-budget-usd") ?? process.env.OPEN_COMPUTER_USE_CLAUDE_BUDGET_USD ?? "2.00";
 const hermesProvider = args.get("hermes-provider") ?? process.env.OPEN_COMPUTER_USE_HERMES_PROVIDER;
@@ -71,7 +74,7 @@ function codexSawToolCalls(stdout, expectedTools) {
       const event = JSON.parse(line);
       if (event.type === "item.completed"
         && event.item?.type === "mcp_tool_call"
-        && event.item?.server === "open-computer-use"
+        && event.item?.server === "overseer-computer-use"
         && event.item?.status === "completed"
         && expected.has(event.item?.tool)) {
         seen.add(event.item.tool);
@@ -121,7 +124,7 @@ function launchFixture() {
 
 function callOpenComputerUse(tool, toolArgs = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, ["call", tool, "--args", JSON.stringify(toolArgs)], {
+    const child = spawn(command, [...commandPrefix, "call", tool, "--args", JSON.stringify(toolArgs)], {
       cwd: process.cwd(),
       stdio: ["ignore", "pipe", "pipe"],
       env: {
@@ -183,7 +186,7 @@ async function waitForFixtureReady(fixture) {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error([
-    "OpenComputerUseFixture did not become visible to open-computer-use.",
+    "Overseer Computer Use fixture did not become visible to the configured MCP command.",
     lastError ? `last error:\n${lastError.message ?? lastError}` : "",
     fixture?.fixtureStderr?.trim() ? `fixture stderr:\n${fixture.fixtureStderr.trim()}` : "",
   ].filter(Boolean).join("\n"));
@@ -223,20 +226,20 @@ function scenarioExpectedTools() {
 }
 
 function scenarioAllowedTools() {
-  return scenarioExpectedTools().map((tool) => `mcp__open-computer-use__${tool}`).join(",");
+  return scenarioExpectedTools().map((tool) => `mcp__overseer-computer-use__${tool}`).join(",");
 }
 
 function makePrompt(expectedValue) {
   if (scenario === "list-apps") {
     return [
-      "Use the open-computer-use MCP list_apps tool exactly once before answering.",
+      "Use the overseer-computer-use MCP list_apps tool exactly once before answering.",
       "Do not use terminal, shell, browser, file, or any other tool.",
       "After the tool call, reply exactly OPEN_CU_AGENT_OK."
     ].join(" ");
   }
 
   return [
-    "Use only open-computer-use MCP tools.",
+    "Use only overseer-computer-use MCP tools.",
     "Call get_app_state for app OpenComputerUseFixture.",
     ...(scenario === "fixture-full" ? [
       `Find the text field and use set_value to set it exactly to ${JSON.stringify(expectedValue)}.`,
@@ -264,10 +267,10 @@ function makeSpecs(prompt) {
         "--strict-mcp-config",
         "--mcp-config", JSON.stringify({
           mcpServers: {
-            "open-computer-use": {
+            "overseer-computer-use": {
               type: "stdio",
               command,
-              args: ["mcp"],
+              args: commandArgs,
               env: { OPEN_COMPUTER_USE_VISUAL_CURSOR: "0" },
             },
           },
@@ -290,8 +293,8 @@ function makeSpecs(prompt) {
         "--disable", "image_generation",
         "--disable", "js_repl",
         "--json",
-        "-c", `mcp_servers.open-computer-use.command=${JSON.stringify(command)}`,
-        "-c", 'mcp_servers.open-computer-use.args=["mcp"]',
+        "-c", `mcp_servers.overseer-computer-use.command=${JSON.stringify(command)}`,
+        "-c", `mcp_servers.overseer-computer-use.args=${JSON.stringify(commandArgs)}`,
         prompt,
       ],
       validate: (result) => result.stdout.includes("OPEN_CU_AGENT_OK") && codexSawToolCalls(result.stdout, scenarioExpectedTools()),

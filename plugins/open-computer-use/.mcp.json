@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "open-computer-use": {
+    "overseer-computer-use": {
       "command": "./scripts/launch-open-computer-use.sh",
       "cwd": "."
     }

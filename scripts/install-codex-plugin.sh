@@ -6,9 +6,9 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 config_helper="${repo_root}/scripts/install-config-helper.mjs"
 codex_home="${CODEX_HOME:-${HOME}/.codex}"
 config_path="${codex_home}/config.toml"
-marketplace_name="open-computer-use-local"
-plugin_name="open-computer-use"
-plugin_source_root="${repo_root}/plugins/${plugin_name}"
+marketplace_name="overseer-computer-use-local"
+plugin_name="overseer-computer-use"
+plugin_source_root="${repo_root}/plugins/open-computer-use"
 plugin_manifest="${plugin_source_root}/.codex-plugin/plugin.json"
 macos_build_script="${repo_root}/scripts/build-open-computer-use-app.sh"
 linux_build_script="${repo_root}/scripts/build-open-computer-use-linux.sh"
@@ -32,9 +32,9 @@ resolve_app_bundle() {
   local -a candidates
 
   if [[ "${configuration}" == "release" ]]; then
-    candidates=("Open Computer Use.app")
+    candidates=("Overseer Computer Use.app")
   else
-    candidates=("Open Computer Use (Dev).app" "Open Computer Use.app")
+    candidates=("Overseer Computer Use (Dev).app" "Overseer Computer Use.app")
   fi
 
   for bundle_name in "${candidates[@]}"; do

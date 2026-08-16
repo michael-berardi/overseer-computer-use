@@ -4,15 +4,15 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 config_helper="${script_dir}/install-config-helper.mjs"
-server_name="open-computer-use"
-command_name="open-computer-use"
+server_name="overseer-computer-use"
+command_name="overseer"
 opencode_config_dir="${XDG_CONFIG_HOME:-${HOME}/.config}/opencode"
 
 usage() {
   cat <<'EOF'
 Usage: ./scripts/install-opencode-mcp.sh
 
-Install the open-computer-use stdio MCP entry into opencode config.
+Install the Overseer Computer Use stdio MCP entry into opencode config.
 Set OPENCODE_CONFIG_PATH to override the primary config file directly.
 EOF
 }

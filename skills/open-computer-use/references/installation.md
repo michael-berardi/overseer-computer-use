@@ -1,6 +1,6 @@
-# Open Computer Use Installation
+# Overseer Computer Use Installation
 
-Read this reference when the user asks to install, verify, repair, or explain Open Computer Use setup.
+Read this reference when the user asks to install, verify, repair, or explain Overseer Computer Use setup.
 
 ## Platform Requirements
 
@@ -12,30 +12,28 @@ On macOS, verify the system version before attempting to run the CLI:
 sw_vers -productVersion
 ```
 
-On macOS versions earlier than 14.0, npm installation may succeed but the bundled binary cannot launch. `open-computer-use doctor` and changes to Accessibility or Screen Recording permissions cannot fix this binary incompatibility.
+On macOS versions earlier than 14.0, npm installation may succeed but the bundled binary cannot launch. `overseer computer-use doctor` and changes to Accessibility or Screen Recording permissions cannot fix this binary incompatibility.
 
 ## Install The CLI
 
 Use npm:
 
 ```sh
-npm install -g open-computer-use
+npm install -g overseer-computer-use
 ```
 
 Verify:
 
 ```sh
-open-computer-use -h
-ocu -h
-open-computer-use call list_apps
+overseer computer-use --help
+overseer computer-use doctor
+overseer computer-use call list_apps
 ```
-
-Supported npm packages expose `ocu` as the short alias. If it is unavailable, use `open-computer-use`.
 
 If the package is already installed and the user asks to update it:
 
 ```sh
-npm update -g open-computer-use
+npm update -g overseer-computer-use
 ```
 
 ## macOS Permissions
@@ -45,7 +43,7 @@ On supported macOS versions, Accessibility and Screen Recording permissions are 
 Run:
 
 ```sh
-open-computer-use doctor
+overseer computer-use doctor
 ```
 
 If permissions are missing, the onboarding UI opens. Ask the user to grant the requested permissions in System Settings. Do not try to bypass TCC prompts or silently manipulate protected settings.
@@ -57,18 +55,17 @@ Windows and Linux do not use this macOS onboarding step, but they still need a l
 Use the built-in installers when they match the user's agent:
 
 ```sh
-open-computer-use install-codex-mcp
-ocu install-codex-mcp
-open-computer-use install-claude-mcp
-open-computer-use install-gemini-mcp
-open-computer-use install-gemini-mcp --scope user
-open-computer-use install-opencode-mcp
+overseer computer-use install-codex-mcp
+overseer computer-use install-claude-mcp
+overseer computer-use install-gemini-mcp
+overseer computer-use install-gemini-mcp --scope user
+overseer computer-use install-opencode-mcp
 ```
 
 Codex App can also use the plugin installer:
 
 ```sh
-open-computer-use install-codex-plugin
+overseer computer-use install-codex-plugin
 ```
 
 For any other MCP client, add a stdio server manually:
@@ -76,9 +73,9 @@ For any other MCP client, add a stdio server manually:
 ```json
 {
   "mcpServers": {
-    "open-computer-use": {
-      "command": "open-computer-use",
-      "args": ["mcp"]
+    "overseer-computer-use": {
+      "command": "overseer",
+      "args": ["computer-use", "mcp"]
     }
   }
 }
@@ -89,14 +86,14 @@ For any other MCP client, add a stdio server manually:
 Install the skill for Codex:
 
 ```sh
-npx skills add iFurySt/open-codex-computer-use -g -a codex --skill open-computer-use -y
+npx skills add michael-berardi/overseer-computer-use -g -a codex --skill open-computer-use -y
 npx skills ls -g -a codex | rg 'open-computer-use'
 ```
 
 Install the skill for Claude Code:
 
 ```sh
-npx skills add iFurySt/open-codex-computer-use -g -a claude-code --skill open-computer-use -y
+npx skills add michael-berardi/overseer-computer-use -g -a claude-code --skill open-computer-use -y
 ```
 
 Update an existing global skill install:
@@ -111,9 +108,8 @@ npx skills upgrade open-computer-use -g -y
 After CLI and MCP setup:
 
 ```sh
-open-computer-use call list_apps
-ocu call list_apps
-open-computer-use call get_app_state --args '{"app":"TextEdit"}'
+overseer computer-use call list_apps
+overseer computer-use call get_app_state --args '{"app":"TextEdit"}'
 ```
 
 If this fails, read [troubleshooting.md](troubleshooting.md).

@@ -37,7 +37,7 @@ final class StructuredErrorsContractTests: XCTestCase {
         XCTAssertEqual(info.callIndex, 2)
         XCTAssertFalse(info.retryable)
         XCTAssertEqual(info.candidates, ToolDefinitions.all.map(\.name))
-        XCTAssertEqual(info.hint, "run `open-computer-use tools` to list supported tools")
+        XCTAssertEqual(info.hint, "run `overseer computer-use tools` to list supported tools")
     }
 
     func testInvalidArgumentsInfoIsNotRetryable() {
@@ -55,7 +55,7 @@ final class StructuredErrorsContractTests: XCTestCase {
 
         XCTAssertEqual(info.code, "app_not_found")
         XCTAssertTrue(info.retryable)
-        XCTAssertEqual(info.hint, "run `open-computer-use targets --running-only` to list running apps, then retry")
+        XCTAssertEqual(info.hint, "run `overseer computer-use targets --running-only` to list running apps, then retry")
         XCTAssertEqual(info.message, "appNotFound(\"App\")")
     }
 
@@ -77,7 +77,7 @@ final class StructuredErrorsContractTests: XCTestCase {
 
         XCTAssertEqual(info.code, "permission_denied")
         XCTAssertFalse(info.retryable)
-        XCTAssertEqual(info.hint, "run `open-computer-use doctor` to review permissions")
+        XCTAssertEqual(info.hint, "run `overseer computer-use doctor` to review permissions")
     }
 
     func testStateUnavailableInfoIsRetryable() {
@@ -116,7 +116,7 @@ final class StructuredErrorsContractTests: XCTestCase {
 
         XCTAssertEqual(info.code, "usage")
         XCTAssertFalse(info.retryable)
-        XCTAssertEqual(info.hint, "run `open-computer-use help call`")
+        XCTAssertEqual(info.hint, "run `overseer computer-use help call`")
         XCTAssertEqual(info.message, "bad flag")
     }
 

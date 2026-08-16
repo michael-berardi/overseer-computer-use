@@ -202,7 +202,7 @@ final class OpenComputerUseKitTests: XCTestCase {
     func testGeneralHelpListsCommandsAndGlobalFlags() {
         let help = openComputerUseHelpText()
 
-        XCTAssertTrue(help.contains("open-computer-use [command] [options]"))
+        XCTAssertTrue(help.contains("overseer computer-use [command] [options]"))
         XCTAssertTrue(help.contains("snapshot <app>"))
         XCTAssertTrue(help.contains("call <tool>"))
         XCTAssertTrue(help.contains("-h, --help"))
@@ -449,9 +449,9 @@ final class OpenComputerUseKitTests: XCTestCase {
     }
 
     func testPreferredPermissionAppBundleURLPrefersInstalledCopyOverTransientRunningCopy() {
-        let installed = URL(fileURLWithPath: "/opt/homebrew/lib/node_modules/open-computer-use/dist/Open Computer Use.app")
-        let running = URL(fileURLWithPath: "/Users/example/projects/open-codex-computer-use/dist/Open Computer Use.app")
-        let fallback = URL(fileURLWithPath: "/Users/example/projects/open-codex-computer-use-debug/dist/Open Computer Use.app")
+        let installed = URL(fileURLWithPath: "/opt/homebrew/lib/node_modules/overseer-computer-use/dist/Overseer Computer Use.app")
+        let running = URL(fileURLWithPath: "/tmp/overseer-computer-use/projects/overseer-computer-use/dist/Overseer Computer Use.app")
+        let fallback = URL(fileURLWithPath: "/tmp/overseer-computer-use-debug/dist/Overseer Computer Use.app")
 
         let resolved = PermissionSupport.preferredPermissionAppBundleURL(
             preferredInstalledBundleURL: installed,
@@ -463,9 +463,9 @@ final class OpenComputerUseKitTests: XCTestCase {
     }
 
     func testPreferredPermissionAppBundleURLPrefersRunningDevelopmentCopy() {
-        let installed = URL(fileURLWithPath: "/Applications/Open Computer Use.app")
-        let running = URL(fileURLWithPath: "/Users/example/projects/open-codex-computer-use/dist/Open Computer Use (Dev).app")
-        let fallback = URL(fileURLWithPath: "/Users/example/projects/open-codex-computer-use-debug/dist/Open Computer Use (Dev).app")
+        let installed = URL(fileURLWithPath: "/Applications/Overseer Computer Use.app")
+        let running = URL(fileURLWithPath: "/tmp/overseer-computer-use/projects/overseer-computer-use/dist/Overseer Computer Use (Dev).app")
+        let fallback = URL(fileURLWithPath: "/tmp/overseer-computer-use-debug/dist/Overseer Computer Use (Dev).app")
 
         let resolved = PermissionSupport.preferredPermissionAppBundleURL(
             preferredInstalledBundleURL: installed,
@@ -478,8 +478,8 @@ final class OpenComputerUseKitTests: XCTestCase {
     }
 
     func testPreferredPermissionAppBundleURLCanPreferRunningReleaseCopyOverStaleInstalledCopy() {
-        let staleInstalled = URL(fileURLWithPath: "/Users/example/projects/open-codex-computer-use/dist/npm/open-computer-use/dist/Open Computer Use.app")
-        let running = URL(fileURLWithPath: "/opt/homebrew/lib/node_modules/open-computer-use/dist/Open Computer Use.app")
+        let staleInstalled = URL(fileURLWithPath: "/tmp/overseer-computer-use/dist/npm/overseer-computer-use/dist/Overseer Computer Use.app")
+        let running = URL(fileURLWithPath: "/opt/homebrew/lib/node_modules/overseer-computer-use/dist/Overseer Computer Use.app")
 
         let resolved = PermissionSupport.preferredPermissionAppBundleURL(
             preferredInstalledBundleURL: staleInstalled,
@@ -492,9 +492,9 @@ final class OpenComputerUseKitTests: XCTestCase {
     }
 
     func testPreferredInstalledAppBundleURLUsesFirstDiscoveredInstalledCopy() {
-        let applications = URL(fileURLWithPath: "/Applications/Open Computer Use.app")
-        let npm = URL(fileURLWithPath: "/opt/homebrew/lib/node_modules/open-computer-use/dist/Open Computer Use.app")
-        let duplicateApplications = URL(fileURLWithPath: "/Applications/Open Computer Use.app")
+        let applications = URL(fileURLWithPath: "/Applications/Overseer Computer Use.app")
+        let npm = URL(fileURLWithPath: "/opt/homebrew/lib/node_modules/overseer-computer-use/dist/Overseer Computer Use.app")
+        let duplicateApplications = URL(fileURLWithPath: "/Applications/Overseer Computer Use.app")
 
         let resolved = PermissionSupport.preferredInstalledAppBundleURL(
             candidates: [applications, npm, duplicateApplications]
@@ -504,8 +504,8 @@ final class OpenComputerUseKitTests: XCTestCase {
     }
 
     func testPermissionClientsKeepStableBundleIdentityAheadOfTransientAppPath() {
-        let installed = URL(fileURLWithPath: "/opt/homebrew/lib/node_modules/open-computer-use/dist/Open Computer Use.app")
-        let running = URL(fileURLWithPath: "/Users/example/projects/open-codex-computer-use/dist/Open Computer Use.app")
+        let installed = URL(fileURLWithPath: "/opt/homebrew/lib/node_modules/overseer-computer-use/dist/Overseer Computer Use.app")
+        let running = URL(fileURLWithPath: "/tmp/overseer-computer-use/projects/overseer-computer-use/dist/Overseer Computer Use.app")
 
         let clients = PermissionSupport.permissionClients(
             primaryBundleURL: installed,
@@ -524,7 +524,7 @@ final class OpenComputerUseKitTests: XCTestCase {
     }
 
     func testPermissionClientsKeepDevelopmentBundleIdentitySeparateFromRelease() {
-        let running = URL(fileURLWithPath: "/Users/example/projects/open-codex-computer-use/dist/Open Computer Use (Dev).app")
+        let running = URL(fileURLWithPath: "/tmp/overseer-computer-use/projects/overseer-computer-use/dist/Overseer Computer Use (Dev).app")
 
         let clients = PermissionSupport.permissionClients(
             primaryBundleURL: running,
@@ -583,7 +583,7 @@ final class OpenComputerUseKitTests: XCTestCase {
         let server = StdioMCPServer(service: ComputerUseService())
         let response = server.handle(line: #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"test","version":"0.3.0"},"capabilities":{}}}"#)
         XCTAssertNotNil(response)
-        XCTAssertTrue(response!.contains(#""name":"open-computer-use""#))
+        XCTAssertTrue(response!.contains(#""name":"overseer-computer-use""#))
         XCTAssertTrue(response!.contains(#""tools":{"listChanged":false}"#))
     }
 
@@ -1834,17 +1834,7 @@ final class OpenComputerUseKitTests: XCTestCase {
         XCTAssertEqual(SoftwareCursorGlyphMetrics.windowSize, CGSize(width: 126, height: 126))
         XCTAssertEqual(SoftwareCursorGlyphMetrics.tipAnchor.x, 60.35, accuracy: 0.01)
         XCTAssertEqual(SoftwareCursorGlyphMetrics.tipAnchor.y, 70.3, accuracy: 0.01)
-        XCTAssertEqual(SoftwareCursorGlyphMetrics.referenceImageResourceName, "official-software-cursor-window-252")
     }
-
-    func testSoftwareCursorGlyphLoadsCursorMotionReferenceImage() throws {
-        let image = try XCTUnwrap(loadReferenceCursorWindowImage())
-        let bitmap = try XCTUnwrap(image.representations.first)
-
-        XCTAssertEqual(bitmap.pixelsWide, 252)
-        XCTAssertEqual(bitmap.pixelsHigh, 252)
-    }
-
     func testSoftwareCursorGlyphArtworkNeutralHeadingMatchesCursorMotionBaseline() {
         let correctedNeutralHeading = SoftwareCursorGlyphMetrics.proceduralContourNeutralHeading
             - SoftwareCursorGlyphMetrics.pointerArtworkRotation

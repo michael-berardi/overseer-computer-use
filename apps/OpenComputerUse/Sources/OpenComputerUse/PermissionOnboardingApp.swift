@@ -6,30 +6,62 @@ import QuartzCore
 @MainActor
 enum PermissionOnboardingApp {
     private static var presentedWindowController: PermissionWindowController?
+    private static var presentedConsentController: TelemetryConsentWindowController?
+    private static let appDelegate = PermissionOnboardingAppDelegate()
 
     static func launch() {
-        guard !PermissionDiagnostics.current().allGranted else {
-            return
-        }
-
         let application = NSApplication.shared
         application.setActivationPolicy(.accessory)
         application.applicationIconImage = Branding.makeAppIconImage(size: 256)
-
-        let delegate = PermissionOnboardingAppDelegate()
-        application.delegate = delegate
+        application.delegate = appDelegate
         application.run()
     }
 
     static func present(terminateOnCompletion: Bool = true) {
-        guard !PermissionDiagnostics.current().allGranted else {
-            return
-        }
-
         let application = NSApplication.shared
         application.setActivationPolicy(.accessory)
         application.applicationIconImage = Branding.makeAppIconImage(size: 256)
+        if TelemetryStore().consent == .undecided {
+            presentConsent(terminateOnCompletion: terminateOnCompletion)
+        } else {
+            presentPermissions(terminateOnCompletion: terminateOnCompletion)
+        }
+    }
 
+    fileprivate static func presentFirstRunOrPermissions() {
+        if TelemetryStore().consent == .undecided {
+            presentConsent(terminateOnCompletion: true)
+        } else {
+            NativeUpdatePrompt.checkAtLaunch()
+            presentPermissions(terminateOnCompletion: true)
+        }
+    }
+
+    private static func presentConsent(terminateOnCompletion: Bool) {
+        let controller = TelemetryConsentWindowController { optedIn in
+            if optedIn {
+                TelemetryCoordinator().optIn()
+            } else {
+                TelemetryStore().decline()
+            }
+            presentedConsentController = nil
+            NativeUpdatePrompt.checkAtLaunch()
+            if PermissionDiagnostics.current().allGranted {
+                NSApp.terminate(nil)
+            } else {
+                presentPermissions(terminateOnCompletion: terminateOnCompletion)
+            }
+        }
+        presentedConsentController = controller
+        controller.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private static func presentPermissions(terminateOnCompletion: Bool) {
+        guard !PermissionDiagnostics.current().allGranted else {
+            if terminateOnCompletion { NSApp.terminate(nil) }
+            return
+        }
         let controller = PermissionWindowController(terminateOnCompletion: terminateOnCompletion)
         presentedWindowController = controller
         controller.showWindow(nil)
@@ -39,17 +71,111 @@ enum PermissionOnboardingApp {
 
 @MainActor
 final class PermissionOnboardingAppDelegate: NSObject, NSApplicationDelegate {
-    private var windowController: PermissionWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let controller = PermissionWindowController()
-        windowController = controller
-        controller.showWindow(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        PermissionOnboardingApp.presentFirstRunOrPermissions()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+}
+
+@MainActor
+final class TelemetryConsentWindowController: NSWindowController {
+    private let onChoice: (Bool) -> Void
+    private var didChoose = false
+
+    init(onChoice: @escaping (Bool) -> Void) {
+        self.onChoice = onChoice
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 400),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = PermissionSupport.bundleDisplayName
+        window.isReleasedWhenClosed = false
+        window.center()
+        super.init(window: window)
+        window.delegate = self
+        window.contentView = buildContent()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    private func buildContent() -> NSView {
+        let root = NSView()
+        root.wantsLayer = true
+        root.layer?.backgroundColor = NSColor(calibratedWhite: 0.055, alpha: 1).cgColor
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 12
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let eyebrow = NSTextField(labelWithString: "PRIVACY / FIRST RUN")
+        eyebrow.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
+        eyebrow.textColor = NSColor(calibratedRed: 0.66, green: 0.48, blue: 0.95, alpha: 1)
+        let title = NSTextField(labelWithString: "Share anonymous usage?")
+        title.font = NSFont.systemFont(ofSize: 28, weight: .bold)
+        let body = NSTextField(wrappingLabelWithString: "If you accept, \(PermissionSupport.bundleDisplayName) sends a random installation ID, app version, macOS architecture, UTC day, launch/heartbeat events, and fixed-category tool success/error totals. Usage batches also carry a random UUIDv4 batch ID solely for retry deduplication.")
+        body.font = NSFont.systemFont(ofSize: 14)
+        body.textColor = NSColor(calibratedWhite: 0.74, alpha: 1)
+        body.maximumNumberOfLines = 5
+        let detail = NSTextField(wrappingLabelWithString: "Never sent: prompts, screenshots, coordinates, app or window names, arguments, paths, command text, user content, or hardware identifiers. Identifier rows expire within 34 UTC days; ID-free daily totals within 360 days. Change later with `overseer computer-use telemetry enable|disable`.")
+        detail.font = NSFont.systemFont(ofSize: 12)
+        detail.textColor = NSColor(calibratedWhite: 0.52, alpha: 1)
+        detail.maximumNumberOfLines = 6
+
+        let buttons = NSStackView()
+        buttons.orientation = .horizontal
+        buttons.spacing = 10
+        buttons.alignment = .centerY
+        buttons.translatesAutoresizingMaskIntoConstraints = false
+        let decline = NSButton(title: "No thanks", target: self, action: #selector(handleDecline))
+        decline.bezelStyle = .rounded
+        decline.contentTintColor = NSColor(calibratedWhite: 0.82, alpha: 1)
+        let accept = NSButton(title: "Share anonymous usage", target: self, action: #selector(handleAccept))
+        accept.bezelStyle = .rounded
+        accept.keyEquivalent = "\r"
+        accept.contentTintColor = NSColor(calibratedRed: 0.70, green: 0.56, blue: 1, alpha: 1)
+        buttons.addArrangedSubview(decline)
+        buttons.addArrangedSubview(accept)
+
+        stack.addArrangedSubview(eyebrow)
+        stack.addArrangedSubview(title)
+        stack.addArrangedSubview(body)
+        stack.addArrangedSubview(detail)
+        stack.addArrangedSubview(buttons)
+        root.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 36),
+            stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -36),
+            stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 32),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -28),
+            buttons.widthAnchor.constraint(equalTo: stack.widthAnchor),
+        ])
+        return root
+    }
+
+    @objc private func handleAccept() { choose(true) }
+    @objc private func handleDecline() { choose(false) }
+
+    private func choose(_ optedIn: Bool) {
+        guard !didChoose else { return }
+        didChoose = true
+        onChoice(optedIn)
+        close()
+    }
+}
+
+extension TelemetryConsentWindowController: NSWindowDelegate {
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        choose(false)
+        return true
     }
 }
 
@@ -181,14 +307,15 @@ private enum PermissionOnboardingLayout {
 final class PermissionContentController: NSViewController {
     weak var delegate: PermissionContentControllerDelegate?
 
-    private let backgroundView = GradientBackgroundView()
+    private let backgroundView = ControlRoomBackgroundView()
     private let stackView = NSStackView()
     private let iconView = AppGlyphView()
-    private let titleLabel = NSTextField(labelWithString: "Enable \(PermissionSupport.currentBundleDisplayName())")
-    private let subtitleLabel = NSTextField(wrappingLabelWithString: "\(PermissionSupport.currentBundleDisplayName()) needs these permissions to use apps on your Mac.\nThese permissions are only used when you ask it to perform tasks.")
+    private let titleLabel = NSTextField(labelWithString: "Connect \(PermissionSupport.currentBundleDisplayName())")
+    private let subtitleLabel = NSTextField(wrappingLabelWithString: "A one-time permission grant lets \(PermissionSupport.currentBundleDisplayName()) work across your Mac. The status below is read from macOS—not inferred from opening Settings.")
+    private let diagramLabel = NSTextField(labelWithString: "AGENT  →  ACCESSIBILITY  →  TARGET APP\n                 ↘  SCREEN CAPTURE  →  SAFE SNAPSHOT")
     private let cardsContainer = NSStackView()
-    private let completionLabel = NSTextField(labelWithString: "All required permissions are enabled.")
-    private let refreshTimerInterval: TimeInterval = 0.25
+    private let completionLabel = NSTextField(labelWithString: "SYSTEM READY")
+    private let refreshTimerInterval: TimeInterval = 0.5
     private let relaunchPromptDelay: TimeInterval = 1.5
 
     private var activeGuidance: SystemPermissionKind?
@@ -259,34 +386,39 @@ final class PermissionContentController: NSViewController {
         stackView.spacing = 12
         stackView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stackView)
-
         iconView.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = NSFont.systemFont(ofSize: 38, weight: .bold)
-        titleLabel.textColor = NSColor(calibratedWhite: 0.18, alpha: 1)
+        titleLabel.font = NSFont.systemFont(ofSize: 32, weight: .bold)
+        titleLabel.textColor = NSColor(calibratedWhite: 0.95, alpha: 1)
         titleLabel.maximumNumberOfLines = 1
-        subtitleLabel.font = NSFont.systemFont(ofSize: 15, weight: .regular)
-        subtitleLabel.textColor = NSColor(calibratedWhite: 0.42, alpha: 1)
+        subtitleLabel.font = NSFont.systemFont(ofSize: 14, weight: .regular)
+        subtitleLabel.textColor = NSColor(calibratedWhite: 0.68, alpha: 1)
         subtitleLabel.alignment = .center
-        subtitleLabel.maximumNumberOfLines = 2
+        subtitleLabel.maximumNumberOfLines = 3
+        diagramLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .medium)
+        diagramLabel.textColor = NSColor(calibratedRed: 0.70, green: 0.56, blue: 1, alpha: 1)
+        diagramLabel.alignment = .center
+        diagramLabel.maximumNumberOfLines = 2
 
         cardsContainer.orientation = .vertical
         cardsContainer.alignment = .centerX
-        cardsContainer.spacing = 14
+        cardsContainer.spacing = 12
         cardsContainer.translatesAutoresizingMaskIntoConstraints = false
 
-        completionLabel.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
-        completionLabel.textColor = NSColor(calibratedRed: 0.16, green: 0.50, blue: 0.23, alpha: 1)
+        completionLabel.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold)
+        completionLabel.textColor = NSColor(calibratedRed: 0.70, green: 0.56, blue: 1, alpha: 1)
         completionLabel.isHidden = true
 
         stackView.addArrangedSubview(iconView)
         stackView.addArrangedSubview(titleLabel)
         stackView.addArrangedSubview(subtitleLabel)
+        stackView.addArrangedSubview(diagramLabel)
         stackView.addArrangedSubview(cardsContainer)
         stackView.addArrangedSubview(completionLabel)
-        stackView.setCustomSpacing(16, after: iconView)
+        stackView.setCustomSpacing(12, after: iconView)
         stackView.setCustomSpacing(8, after: titleLabel)
-        stackView.setCustomSpacing(24, after: subtitleLabel)
-        stackView.setCustomSpacing(14, after: cardsContainer)
+        stackView.setCustomSpacing(12, after: subtitleLabel)
+        stackView.setCustomSpacing(20, after: diagramLabel)
+        stackView.setCustomSpacing(12, after: cardsContainer)
 
         NSLayoutConstraint.activate([
             backgroundView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -381,11 +513,9 @@ final class PermissionCardView: NSView {
     private func configure() {
         wantsLayer = true
         layer?.cornerRadius = PermissionOnboardingLayout.cardCornerRadius
-        layer?.backgroundColor = NSColor(calibratedWhite: 0.99, alpha: 0.92).cgColor
-        layer?.shadowColor = NSColor.black.withAlphaComponent(0.1).cgColor
-        layer?.shadowOpacity = 1
-        layer?.shadowRadius = 16
-        layer?.shadowOffset = CGSize(width: 0, height: -2)
+        layer?.backgroundColor = NSColor(calibratedWhite: 0.095, alpha: 1).cgColor
+        layer?.borderWidth = 1
+        layer?.borderColor = NSColor(calibratedWhite: 0.20, alpha: 1).cgColor
 
         let content = NSStackView()
         content.orientation = .horizontal
@@ -397,17 +527,13 @@ final class PermissionCardView: NSView {
         iconBackground.translatesAutoresizingMaskIntoConstraints = false
         iconBackground.wantsLayer = true
         iconBackground.layer?.cornerRadius = PermissionOnboardingLayout.cardIconSize / 2
-        iconBackground.layer?.backgroundColor = NSColor(calibratedWhite: 1, alpha: 0.92).cgColor
-        iconBackground.layer?.borderWidth = 2
-        iconBackground.layer?.borderColor = (
-            permission == .accessibility
-            ? NSColor.systemBlue.withAlphaComponent(0.28)
-            : NSColor(calibratedWhite: 0.82, alpha: 1)
-        ).cgColor
+        iconBackground.layer?.backgroundColor = NSColor(calibratedWhite: 0.14, alpha: 1).cgColor
+        iconBackground.layer?.borderWidth = 1
+        iconBackground.layer?.borderColor = NSColor(calibratedRed: 0.70, green: 0.56, blue: 1, alpha: 0.55).cgColor
 
         let icon = NSImageView()
         icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.contentTintColor = permission == .accessibility ? NSColor.systemBlue : NSColor.systemGray
+        icon.contentTintColor = NSColor(calibratedRed: 0.76, green: 0.68, blue: 1, alpha: 1)
         icon.image = NSImage(systemSymbolName: permission.symbolName, accessibilityDescription: permission.title)
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 24, weight: .semibold)
         iconBackground.addSubview(icon)
@@ -418,12 +544,12 @@ final class PermissionCardView: NSView {
         labels.spacing = 2
 
         let title = NSTextField(labelWithString: permission.title)
-        title.font = NSFont.systemFont(ofSize: 20, weight: .bold)
-        title.textColor = NSColor(calibratedWhite: 0.18, alpha: 1)
+        title.font = NSFont.systemFont(ofSize: 19, weight: .semibold)
+        title.textColor = NSColor(calibratedWhite: 0.94, alpha: 1)
 
         let subtitle = NSTextField(labelWithString: restartRequired ? "Restart to finish enabling this permission" : permission.subtitle)
-        subtitle.font = NSFont.systemFont(ofSize: 14, weight: .regular)
-        subtitle.textColor = NSColor(calibratedWhite: 0.42, alpha: 1)
+        subtitle.font = NSFont.systemFont(ofSize: 13, weight: .regular)
+        subtitle.textColor = NSColor(calibratedWhite: 0.60, alpha: 1)
 
         labels.addArrangedSubview(title)
         labels.addArrangedSubview(subtitle)
@@ -436,7 +562,7 @@ final class PermissionCardView: NSView {
         content.addArrangedSubview(spacer)
 
         if diagnostics.isGranted(permission) {
-            let done = StatusChipView(text: "Done", foreground: NSColor(calibratedRed: 0.16, green: 0.50, blue: 0.23, alpha: 1), background: NSColor(calibratedRed: 0.93, green: 0.98, blue: 0.94, alpha: 1))
+            let done = StatusChipView(text: "READY", foreground: NSColor(calibratedRed: 0.73, green: 0.64, blue: 1, alpha: 1), background: NSColor(calibratedRed: 0.24, green: 0.18, blue: 0.36, alpha: 1))
             content.addArrangedSubview(done)
         } else {
             let button = PrimaryActionButton(title: restartRequired ? "Restart" : "Allow", target: self, action: #selector(handleAllow))
@@ -484,8 +610,7 @@ final class GuidancePlaceholderView: NSView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
-        layer?.cornerRadius = PermissionOnboardingLayout.cardCornerRadius
-        layer?.backgroundColor = NSColor(calibratedWhite: 0.98, alpha: 0.6).cgColor
+        layer?.backgroundColor = NSColor(calibratedWhite: 0.085, alpha: 1).cgColor
 
         let label = NSTextField(labelWithString: "COMPLETE IN SYSTEM SETTINGS")
         label.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
@@ -1061,11 +1186,10 @@ final class PermissionAccessoryPanelView: NSView {
         arrow.translatesAutoresizingMaskIntoConstraints = false
         arrow.image = NSImage(systemSymbolName: "arrow.up", accessibilityDescription: "Drag upward")
         arrow.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 26, weight: .bold)
-        arrow.contentTintColor = NSColor.systemBlue
+        arrow.contentTintColor = NSColor(calibratedRed: 0.70, green: 0.56, blue: 1, alpha: 1)
 
-        instructionLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-        instructionLabel.textColor = NSColor(calibratedWhite: 0.4, alpha: 1)
-        instructionLabel.translatesAutoresizingMaskIntoConstraints = false
+        instructionLabel.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
+        instructionLabel.textColor = NSColor(calibratedWhite: 0.68, alpha: 1)
         instructionLabel.lineBreakMode = .byTruncatingTail
         instructionLabel.maximumNumberOfLines = 1
         instructionLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -1218,64 +1342,31 @@ enum Branding {
         let image = NSImage(size: NSSize(width: size, height: size))
         image.lockFocus()
 
-        let canvasInset = size * (92.0 / 1024.0)
-        let rect = CGRect(origin: .zero, size: image.size).insetBy(dx: canvasInset, dy: canvasInset)
-        let tile = NSBezierPath(roundedRect: rect, xRadius: rect.width * 0.22, yRadius: rect.height * 0.22)
+        let inset = size * 0.09
+        let tileRect = CGRect(origin: .zero, size: image.size).insetBy(dx: inset, dy: inset)
+        let tile = NSBezierPath(roundedRect: tileRect, xRadius: size * 0.20, yRadius: size * 0.20)
+        NSColor(calibratedWhite: 0.055, alpha: 1).setFill()
+        tile.fill()
+        NSColor(calibratedWhite: 0.23, alpha: 1).setStroke()
+        tile.lineWidth = max(1, size * 0.012)
+        tile.stroke()
 
-        let gradient = NSGradient(colors: [
-            NSColor(calibratedRed: 0.12, green: 0.67, blue: 0.99, alpha: 1),
-            NSColor(calibratedRed: 0.94, green: 0.74, blue: 0.93, alpha: 1),
-        ])!
-        gradient.draw(in: tile, angle: 20)
+        let center = CGPoint(x: size / 2, y: size / 2)
+        let radius = size * 0.285
+        let ring = NSBezierPath(ovalIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+        ring.lineWidth = max(1.5, size * 0.045)
+        NSColor(calibratedRed: 0.70, green: 0.56, blue: 1, alpha: 1).setStroke()
+        ring.stroke()
 
-        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-            CGPoint(x: rect.minX + rect.width * x / 256, y: rect.minY + rect.height * (1 - y / 256))
-        }
-
-        func scale(_ value: CGFloat) -> CGFloat {
-            rect.width * value / 256
-        }
-
-        let arc = NSBezierPath()
-        arc.move(to: point(74, 156))
-        arc.curve(
-            to: point(182, 88),
-            controlPoint1: point(78, 112),
-            controlPoint2: point(136, 72)
-        )
-        arc.lineWidth = scale(12)
-        arc.lineCapStyle = .round
-        NSColor.white.withAlphaComponent(0.72).setStroke()
-        arc.stroke()
-
-        let pointerShadow = NSBezierPath()
-        pointerShadow.move(to: point(129, 102))
-        pointerShadow.line(to: point(129, 181))
-        pointerShadow.line(to: point(149, 162))
-        pointerShadow.line(to: point(161, 193))
-        pointerShadow.line(to: point(176, 186))
-        pointerShadow.line(to: point(164, 157))
-        pointerShadow.line(to: point(192, 152))
-        pointerShadow.close()
-        NSColor.white.withAlphaComponent(0.14).setFill()
-        pointerShadow.fill()
-
-        let pointer = NSBezierPath()
-        pointer.move(to: point(126, 98))
-        pointer.line(to: point(126, 177))
-        pointer.line(to: point(146, 158))
-        pointer.line(to: point(158, 189))
-        pointer.line(to: point(173, 182))
-        pointer.line(to: point(161, 153))
-        pointer.line(to: point(189, 148))
-        pointer.close()
-        pointer.lineWidth = scale(6)
-        pointer.lineJoinStyle = .round
-        pointer.lineCapStyle = .round
-        NSColor.white.withAlphaComponent(0.94).setFill()
-        pointer.fill()
-        NSColor.white.setStroke()
-        pointer.stroke()
+        let diamondRadius = size * 0.13
+        let diamond = NSBezierPath()
+        diamond.move(to: CGPoint(x: center.x, y: center.y + diamondRadius))
+        diamond.line(to: CGPoint(x: center.x + diamondRadius, y: center.y))
+        diamond.line(to: CGPoint(x: center.x, y: center.y - diamondRadius))
+        diamond.line(to: CGPoint(x: center.x - diamondRadius, y: center.y))
+        diamond.close()
+        NSColor(calibratedWhite: 0.95, alpha: 1).setFill()
+        diamond.fill()
 
         image.unlockFocus()
         return image
@@ -1283,16 +1374,15 @@ enum Branding {
 }
 
 @MainActor
-final class GradientBackgroundView: NSView {
+final class ControlRoomBackgroundView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-
-        let gradient = NSGradient(colors: [
-            NSColor(calibratedWhite: 0.985, alpha: 1),
-            NSColor(calibratedRed: 0.95, green: 0.97, blue: 1, alpha: 1),
-            NSColor(calibratedRed: 0.98, green: 0.94, blue: 1, alpha: 1),
-        ])!
-        gradient.draw(in: bounds, angle: 15)
+        NSColor(calibratedWhite: 0.055, alpha: 1).setFill()
+        bounds.fill()
+        NSColor(calibratedWhite: 0.13, alpha: 1).setStroke()
+        let border = NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5))
+        border.lineWidth = 1
+        border.stroke()
     }
 }
 

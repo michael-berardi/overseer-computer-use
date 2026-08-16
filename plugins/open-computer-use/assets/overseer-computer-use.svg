@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Overseer Computer Use">
+  <rect width="256" height="256" rx="56" fill="#0B0B0F"/>
+  <path d="M58 128a70 70 0 1 1 140 0" fill="none" stroke="#F4F1EA" stroke-width="14" stroke-linecap="round"/>
+  <path d="M78 128a50 50 0 1 1 100 0" fill="none" stroke="#8B5CF6" stroke-width="12" stroke-linecap="round"/>
+  <path d="M128 66v124M68 128h120" fill="none" stroke="#38383D" stroke-width="4"/>
+  <circle cx="128" cy="128" r="12" fill="#F4F1EA"/>
+</svg>

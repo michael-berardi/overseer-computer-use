@@ -27,7 +27,7 @@ public enum CaptureCommandError: Error, LocalizedError, Equatable {
         case let .noCapturableWindow(app):
             return "Application '\(app)' has no on-screen capturable window."
         case .screenRecordingPermissionDenied:
-            return "Screen Recording permission is not granted to this process. Run `open-computer-use doctor` and grant permission before capturing."
+            return "Screen Recording permission is not granted to this process. Run `overseer computer-use doctor` and grant permission before capturing."
         case let .invalidConfiguration(message):
             return "Invalid capture configuration: \(message)"
         case let .outputNotWritable(path):
@@ -430,7 +430,7 @@ public final class ScreenCaptureKitFrameSource: NSObject, ScreenStreamFrameSourc
     public var frameHandler: (@Sendable (CapturedVideoFrame) -> Void)?
     public var failureHandler: (@Sendable (any Error) -> Void)?
 
-    private let sampleQueue = DispatchQueue(label: "open-computer-use.stream.samples", qos: .userInitiated)
+    private let sampleQueue = DispatchQueue(label: "overseer-computer-use.stream.samples", qos: .userInitiated)
     private let stateLock = NSLock()
     private var stream: SCStream?
     private var failureReported = false

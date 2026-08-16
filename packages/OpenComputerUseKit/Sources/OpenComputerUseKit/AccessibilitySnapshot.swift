@@ -610,10 +610,10 @@ func validateSnapshotPermissions(
     includeScreenshot: Bool
 ) throws {
     guard permissions.accessibilityTrusted else {
-        throw ComputerUseError.permissionDenied("Accessibility permission is required. Run `open-computer-use doctor` and grant access to Open Computer Use.")
+        throw ComputerUseError.permissionDenied("Accessibility permission is required. Run `overseer computer-use doctor` and grant access to Overseer Computer Use.")
     }
     if includeScreenshot, !permissions.screenCaptureGranted {
-        throw ComputerUseError.permissionDenied("Screen Recording permission is required for screenshots. Run `open-computer-use doctor` and grant access to Open Computer Use.")
+        throw ComputerUseError.permissionDenied("Screen Recording permission is required for screenshots. Run `overseer computer-use doctor` and grant access to Overseer Computer Use.")
     }
 }
 

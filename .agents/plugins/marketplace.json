@@ -1,11 +1,11 @@
 {
-  "name": "open-computer-use-local",
+  "name": "overseer-computer-use-local",
   "interface": {
-    "displayName": "Open Computer Use Local"
+    "displayName": "Overseer Computer Use"
   },
   "plugins": [
     {
-      "name": "open-computer-use",
+      "name": "overseer-computer-use",
       "source": {
         "source": "local",
         "path": "./plugins/open-computer-use"

@@ -116,7 +116,7 @@ Computer Use tools let you interact with macOS apps by performing UI actions.
 
 Some apps might have a separate dedicated plugin or skill. You may want to use that plugin or skill instead of Computer Use when it seems like a good fit for the task. While the separate plugin or skill may not expose every feature in the app, if the plugin can perform the task with its available features, prefer it. If the needed capability is not exposed there, use Computer Use may be appropriate for the missing interaction.
 
-Begin by calling `get_app_state` every turn you want to use Computer Use to get the latest state before acting. Codex will automatically stop the session after each assistant turn, so this step is required before interacting with apps in a new assistant turn.
+Begin by calling `get_app_state` every turn you want to use Computer Use to get the latest state before acting. Some MCP hosts stop the session after each assistant turn, so this step is required before interacting with apps in a new assistant turn.
 
 The available tools are list_apps, get_app_state, click, perform_secondary_action, scroll, drag, type_text, press_key, and set_value. If any of these are not available in your environment, use tool_search to surface one before calling any Computer Use action tools.
 
@@ -164,7 +164,7 @@ public final class StdioMCPServer {
                     result: [
                         "protocolVersion": "2025-03-26",
                         "serverInfo": [
-                            "name": "open-computer-use",
+                            "name": "overseer-computer-use",
                             "version": openComputerUseVersion,
                         ],
                         "capabilities": [

@@ -75,7 +75,7 @@ enum MacOSAppAgentProxy {
     @MainActor
     private static func connectOrLaunchAgent(socketPath: String) throws -> AppAgentSocketClient {
         guard let appURL = PermissionSupport.currentAppBundleURL() else {
-            throw OpenComputerUseCLIError(message: "Unable to locate Open Computer Use.app for app-scoped macOS permissions.")
+            throw OpenComputerUseCLIError(message: "Unable to locate Overseer Computer Use.app for app-scoped macOS permissions.")
         }
 
         // Serialize probe/terminate-stale/unlink/launch/wait across every proxy
@@ -108,7 +108,7 @@ enum MacOSAppAgentProxy {
                 Thread.sleep(forTimeInterval: 0.05)
             }
 
-            throw OpenComputerUseCLIError(message: "Timed out waiting for Open Computer Use.app agent to start.")
+            throw OpenComputerUseCLIError(message: "Timed out waiting for Overseer Computer Use.app agent to start.")
         }
     }
 
@@ -252,18 +252,26 @@ private final class AppAgentSocketListener: @unchecked Sendable {
     private let path: String
     private let socketFD: Int32
     private let boundSocketIdentity: (device: dev_t, inode: ino_t)?
+    private let tokenPath: String
+    private let capabilityToken: String
     private var running = true
-
     init(path: String) throws {
         self.path = path
+        self.tokenPath = path + ".token"
+        self.capabilityToken = UUID().uuidString.lowercased()
 
         // Never replace a socket that a live agent still owns; refuse to start
         // instead of orphaning the running agent's clients.
         if AppAgentSocketClient.probe(path: path) {
-            throw OpenComputerUseCLIError(message: "Another Open Computer Use.app agent already owns the socket at \(path)")
+            throw OpenComputerUseCLIError(message: "Another Overseer Computer Use.app agent already owns the socket at \(path)")
         }
         unlink(path)
 
+        try Data(capabilityToken.utf8).write(to: URL(fileURLWithPath: tokenPath), options: .atomic)
+        guard chmod(tokenPath, mode_t(S_IRUSR | S_IWUSR)) == 0 else {
+            unlink(tokenPath)
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
         let createdSocketFD = socket(AF_UNIX, SOCK_STREAM, 0)
         guard createdSocketFD >= 0 else {
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
@@ -292,17 +300,18 @@ private final class AppAgentSocketListener: @unchecked Sendable {
         }
         guard bindResult == 0 else {
             close(createdSocketFD)
+            unlink(tokenPath)
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
-
         guard listen(createdSocketFD, 16) == 0 else {
             close(createdSocketFD)
+            unlink(tokenPath)
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
-
         guard chmod(path, mode_t(S_IRUSR | S_IWUSR)) == 0 else {
             close(createdSocketFD)
             unlink(path)
+            unlink(tokenPath)
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
@@ -320,7 +329,7 @@ private final class AppAgentSocketListener: @unchecked Sendable {
     }
 
     func stop() {
-        running = false
+        unlink(tokenPath)
         close(socketFD)
         // Wake a slot-waiting accept loop so it can observe `running == false`
         // and exit instead of lingering until process teardown.
@@ -364,21 +373,20 @@ private final class AppAgentSocketListener: @unchecked Sendable {
                 continue
             }
 
-            Thread.detachNewThread {
-                let connection = AppAgentConnection(fileDescriptor: clientFD)
+                let connection = AppAgentConnection(fileDescriptor: clientFD, capabilityToken: capabilityToken)
                 connection.run()
                 AppAgentConcurrency.clientSlots.signal()
             }
         }
     }
-}
-
 private final class AppAgentConnection: @unchecked Sendable {
     private let channel: LineDelimitedSocketChannel
+    private let capabilityToken: String
     private let server = StdioMCPServer()
 
-    init(fileDescriptor: Int32) {
+    init(fileDescriptor: Int32, capabilityToken: String) {
         channel = LineDelimitedSocketChannel(fileDescriptor: fileDescriptor)
+        self.capabilityToken = capabilityToken
     }
 
     func run() {
@@ -395,7 +403,9 @@ private final class AppAgentConnection: @unchecked Sendable {
             else {
                 return ["error": "Invalid app-agent request"]
             }
-
+            guard request["nonce"] as? String == capabilityToken else {
+                return ["error": "Unauthenticated app-agent request"]
+            }
             switch kind {
             case "agentInfo":
                 return [
@@ -637,9 +647,11 @@ private func openConnectedSocket(path: String) -> Int32? {
 
 private final class AppAgentSocketClient: @unchecked Sendable {
     private let channel: LineDelimitedSocketChannel
+    private let tokenPath: String
 
-    private init(fileDescriptor: Int32) {
+    private init(fileDescriptor: Int32, tokenPath: String) {
         channel = LineDelimitedSocketChannel(fileDescriptor: fileDescriptor)
+        self.tokenPath = tokenPath
     }
 
     static func connect(path: String) -> AppAgentSocketClient? {
@@ -647,7 +659,7 @@ private final class AppAgentSocketClient: @unchecked Sendable {
             return nil
         }
 
-        return AppAgentSocketClient(fileDescriptor: fd)
+        return AppAgentSocketClient(fileDescriptor: fd, tokenPath: path + ".token")
     }
 
     /// Returns true when a peer accepts connections at `path`, i.e. a live
@@ -662,7 +674,9 @@ private final class AppAgentSocketClient: @unchecked Sendable {
     }
 
     func request(_ object: [String: Any]) throws -> [String: Any] {
-        let data = try JSONSerialization.data(withJSONObject: object, options: [.withoutEscapingSlashes])
+        var authenticatedObject = object
+        authenticatedObject["nonce"] = try String(contentsOfFile: tokenPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        let data = try JSONSerialization.data(withJSONObject: authenticatedObject, options: [.withoutEscapingSlashes])
         guard let line = String(data: data, encoding: .utf8) else {
             throw ComputerUseError.message("Failed to encode app-agent request.")
         }
@@ -672,7 +686,7 @@ private final class AppAgentSocketClient: @unchecked Sendable {
         guard let responseLine = channel.readLine(),
               let response = try JSONSerialization.jsonObject(with: Data(responseLine.utf8)) as? [String: Any]
         else {
-            throw ComputerUseError.message("Open Computer Use.app agent closed the connection.")
+            throw ComputerUseError.message("Overseer Computer Use.app agent closed the connection.")
         }
 
         if let error = response["error"] as? String {

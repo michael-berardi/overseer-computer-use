@@ -186,7 +186,7 @@ func resolveAppServerArgs(flags commonFlags) ([]string, error) {
 	configPrefix := "mcp_servers." + serverName
 	return append(args,
 		"-c", configPrefix+".command="+strconv.Quote(target.ServerBin),
-		"-c", configPrefix+".args=[\"mcp\"]",
+		"-c", configPrefix+".args=[\"computer-use\",\"mcp\"]",
 		"-c", configPrefix+".cwd="+strconv.Quote(target.PluginRoot),
 	), nil
 }

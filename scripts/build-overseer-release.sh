@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+team="T63VT9UAY2"
+app_identity="${OPEN_COMPUTER_USE_CODESIGN_IDENTITY:-}"
+installer_identity="${OPEN_COMPUTER_USE_INSTALLER_IDENTITY:-}"
+notary_profile="${OPEN_COMPUTER_USE_NOTARYTOOL_PROFILE:-}"
+version="${OPEN_COMPUTER_USE_RELEASE_VERSION:-}"
+
+fail() { echo "release error: $*" >&2; exit 1; }
+[[ -n "$app_identity" ]] || fail "OPEN_COMPUTER_USE_CODESIGN_IDENTITY is required"
+[[ -n "$installer_identity" ]] || fail "OPEN_COMPUTER_USE_INSTALLER_IDENTITY is required"
+[[ -n "$notary_profile" ]] || fail "OPEN_COMPUTER_USE_NOTARYTOOL_PROFILE is required"
+[[ "$app_identity" == "Developer ID Application:"* && "$app_identity" == *"($team)" ]] || fail "app identity must be Developer ID Application for team $team"
+[[ "$installer_identity" == "Developer ID Installer:"* && "$installer_identity" == *"($team)" ]] || fail "installer identity must be Developer ID Installer for team $team"
+command -v pkgbuild >/dev/null || fail "pkgbuild is required"
+command -v xcrun >/dev/null || fail "Xcode command line tools are required"
+command -v shasum >/dev/null || fail "shasum is required"
+
+if [[ -z "$version" ]]; then
+  version="$(python3 - "$repo_root/plugins/open-computer-use/.codex-plugin/plugin.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1], encoding="utf-8"))["version"])
+PY
+)"
+fi
+
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || fail "release version must be a stable semver"
+output="$repo_root/dist/release/overseer-computer-use/$version"
+release_root="$repo_root/dist/release/overseer-computer-use"
+case "$(python3 - "$output" "$release_root" <<'PY'
+import pathlib, sys
+print(pathlib.Path(sys.argv[1]).resolve().is_relative_to(pathlib.Path(sys.argv[2]).resolve()))
+PY
+)" in
+  True) ;;
+  *) fail "release output escapes the release root" ;;
+esac
+rm -rf "$output"
+mkdir -p "$output"
+
+OPEN_COMPUTER_USE_CODESIGN_MODE=identity \
+OPEN_COMPUTER_USE_CODESIGN_IDENTITY="$app_identity" \
+OPEN_COMPUTER_USE_NOTARYTOOL_PROFILE="$notary_profile" \
+OPEN_COMPUTER_USE_BUNDLE_VERSION="$version" \
+  "$repo_root/scripts/build-open-computer-use-app.sh" release --arch universal
+
+app="$repo_root/dist/Overseer Computer Use.app"
+pkg="$output/Overseer-Computer-Use.pkg"
+zip="$output/Overseer-Computer-Use.zip"
+[[ -d "$app" ]] || fail "release app was not produced"
+
+pkgbuild --component "$app" --install-location /Applications --sign "$installer_identity" "$pkg"
+xcrun notarytool submit "$pkg" --keychain-profile "$notary_profile" --wait
+xcrun stapler staple "$pkg"
+xcrun stapler validate "$pkg"
+ditto -c -k --sequesterRsrc --keepParent "$app" "$zip"
+xcrun stapler validate "$app"
+
+(cd "$output" && shasum -a 256 "$(basename "$pkg")" "$(basename "$zip")" > SHA256SUMS)
+(cd "$output" && shasum -a 256 "$(basename "$pkg")" > "$(basename "$pkg").sha256")
+(cd "$output" && shasum -a 256 "$(basename "$zip")" > "$(basename "$zip").sha256")
+python3 - "$output" "$version" "$team" <<'PY'
+import hashlib, json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+version, team = sys.argv[2:]
+artifacts = {}
+for path in sorted(root.iterdir()):
+    if path.name in {"release-manifest.json", "SHA256SUMS"} or not path.is_file(): continue
+    artifacts[path.name] = {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size}
+manifest = {
+    "product": "Overseer Computer Use",
+    "app": "overseer-computer-use",
+    "version": version,
+    "bundleIdentifier": "com.libertydesignstudio.overseer-computer-use",
+    "teamIdentifier": team,
+    "designatedRequirement": 'identifier "com.libertydesignstudio.overseer-computer-use" and anchor apple generic and certificate leaf[subject.OU] = "T63VT9UAY2"',
+    "artifacts": artifacts,
+}
+(root / "release-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+PY
+
+echo "Built signed and notarized Overseer Computer Use release at $output"

@@ -267,7 +267,7 @@ func TestResolveTransportUsesDirectForExplicitNonSkyBinary(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	serverBin := filepath.Join(root, "open-computer-use.sh")
+	serverBin := filepath.Join(root, "overseer-computer-use.sh")
 	if err := os.WriteFile(serverBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatalf("write server bin: %v", err)
 	}

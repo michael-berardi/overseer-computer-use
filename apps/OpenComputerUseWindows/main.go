@@ -491,7 +491,7 @@ func runPowerShell(request psRequest) (*psResponse, error) {
 		return nil, errors.New("Windows Computer Use runtime requires powershell.exe on Windows")
 	}
 
-	tempDir, err := os.MkdirTemp("", "open-computer-use-windows-*")
+	tempDir, err := os.MkdirTemp("", "overseer-computer-use-windows-*")
 	if err != nil {
 		return nil, err
 	}
@@ -1191,7 +1191,7 @@ func handleMCPRequest(request map[string]any, svc *service) map[string]any {
 		return jsonRPCResult(id, map[string]any{
 			"protocolVersion": "2025-03-26",
 			"serverInfo": map[string]any{
-				"name":    "open-computer-use",
+				"name":    "overseer-computer-use",
 				"version": version,
 			},
 			"capabilities": map[string]any{"tools": map[string]any{"listChanged": false}},
@@ -1233,16 +1233,16 @@ func jsonRPCError(id any, code int, message string) map[string]any {
 func helpText(command string) string {
 	switch command {
 	case "mcp":
-		return "Usage:\n  open-computer-use.exe mcp\n\nStart the stdio MCP server.\n"
+		return "Usage:\n  overseer computer-use mcp\n\nStart the stdio MCP server.\n"
 	case "call":
-		return "Usage:\n  open-computer-use.exe call <tool> [--args '<json-object>']\n  open-computer-use.exe call --calls '<json-array>'\n\nThe JSON array form keeps all calls in one process so element_index state can be reused.\n"
+		return "Usage:\n  overseer computer-use call <tool> [--args '<json-object>']\n  overseer computer-use call --calls '<json-array>'\n\nThe JSON array form keeps all calls in one process so element_index state can be reused.\n"
 	case "snapshot":
-		return "Usage:\n  open-computer-use.exe snapshot [--text-limit <positive-int|max>] [--max-tree-nodes <positive-int>] [--max-tree-depth <positive-int>] <app>\n\nPrint the current Windows UI Automation snapshot for the target app.\n"
+		return "Usage:\n  overseer computer-use snapshot [--text-limit <positive-int|max>] [--max-tree-nodes <positive-int>] [--max-tree-depth <positive-int>] <app>\n\nPrint the current Windows UI Automation snapshot for an app.\n"
 	default:
-		return `Open Computer Use for Windows
+		return `Overseer Computer Use for Windows
 
 Usage:
-  open-computer-use.exe [command] [options]
+  overseer computer-use [command] [options]
 
 Commands:
   mcp                  Start the stdio MCP server.

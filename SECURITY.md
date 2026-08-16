@@ -1,15 +1,17 @@
-# 安全策略
+# Security and privacy
 
-## 漏洞反馈
+## Reporting
 
-如果发现疑似安全漏洞，不要直接提公开 issue。
+Please report a suspected vulnerability privately to the repository maintainers before opening a public issue. Include the affected version, operating system, reproduction steps, impact, and any safe mitigation. Do not include credentials, personal data, screenshots, or user content.
 
-请通过你们组织内部约定的私有安全通道反馈，并尽量附上：
+## Trust boundaries
 
-- 影响范围和潜在风险。
-- 复现步骤或 PoC。
-- 已知的缓解方式或临时绕过方案。
+Overseer Computer Use is local-first. The signed macOS app owns Accessibility and Screen Recording permissions; the `overseer` shim and MCP host communicate with it over an owner-only Unix socket in the user's temporary directory. The socket is not a network listener and requests are authenticated for the same user. The runtime never grants TCC access merely because System Settings opened.
 
-## 适用范围
+## Telemetry
 
-这个仓库本身只是一个基础模板。基于它创建的新项目，应该把这里替换成自己真实的安全联系人和响应流程。
+Telemetry is undecided until the first-run modal. No network request or install identifier exists before opt-in. Opt-in events use `lds.app-telemetry.event.v2` and contain only the fixed launch/heartbeat/usage allowlist documented in the README. Usage events carry a lowercase UUIDv4 `batchId`; launch and heartbeat forbid it. Usage counters are persisted as an immutable in-flight batch for retry, and counters recorded later are kept separately. They exclude prompts, screenshots, coordinates, app/window names, arguments, paths, command text, user content, raw IP/UA, secrets, and machine identifiers. Failures are silent and cannot block a tool call. Disabling telemetry deletes the local identifier, counters, in-flight batch, and cadence markers.
+
+## Update supply chain
+
+Public releases require Developer ID Application and Developer ID Installer identities for team `T63VT9UAY2`, notarization, a stable designated requirement, and published SHA-256 checksums. The updater verifies all of these before an atomic replacement, keeps a previous app for rollback, and never uses an ad-hoc candidate as a public update. Local ad-hoc signing is available only with an explicit development flag.

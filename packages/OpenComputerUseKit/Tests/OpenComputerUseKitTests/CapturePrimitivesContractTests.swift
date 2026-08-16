@@ -167,7 +167,7 @@ final class CapturePrimitivesContractTests: XCTestCase {
         )
         XCTAssertEqual(
             CaptureCommandError.screenRecordingPermissionDenied.errorDescription,
-            "Screen Recording permission is not granted to this process. Run `open-computer-use doctor` and grant permission before capturing."
+            "Screen Recording permission is not granted to this process. Run `overseer computer-use doctor` and grant permission before capturing."
         )
         XCTAssertEqual(
             CaptureCommandError.invalidConfiguration("bad").errorDescription,

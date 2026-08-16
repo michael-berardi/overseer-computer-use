@@ -7,8 +7,8 @@ This directory is intended to be run from `scripts/computer-use-cli/` inside the
 ```bash
 cd scripts/computer-use-cli
 go run . list-tools --transport app-server
-go run . call list_apps --transport direct --server-bin /path/to/open-computer-use
-go run . call-seq --transport direct --server-bin /path/to/open-computer-use --calls-file /tmp/calls.json
+go run . call list_apps --transport direct --server-bin /path/to/overseer-computer-use
+go run . call-seq --transport direct --server-bin /path/to/overseer-computer-use --calls-file /tmp/calls.json
 ```
 
 It supports two transports:
@@ -19,25 +19,25 @@ It supports two transports:
 `auto` is the default:
 
 - for the official bundled proprietary `computer-use`, it uses `app-server`; this is currently reliable for inventory probes, not raw tool calls
-- for explicitly provided non-Sky binaries such as `open-computer-use`, it uses `direct`
+- for explicitly provided non-Sky binaries such as `overseer-computer-use`, it uses `direct`
 
 ## Commands
 
 ```bash
 go run . resolve-server
 go run . list-tools --transport app-server
-go run . call list_apps --transport direct --server-bin /path/to/open-computer-use
-go run . call get_app_state --transport direct --server-bin /path/to/open-computer-use --args '{"app":"TextEdit"}'
-go run . call-seq --transport direct --server-bin /path/to/open-computer-use --calls-file /tmp/calls.json
+go run . call list_apps --transport direct --server-bin /path/to/overseer-computer-use
+go run . call get_app_state --transport direct --server-bin /path/to/overseer-computer-use --args '{"app":"TextEdit"}'
+go run . call-seq --transport direct --server-bin /path/to/overseer-computer-use --calls-file /tmp/calls.json
 ```
 
 Explicit transport examples:
 
 ```bash
 go run . list-tools --transport app-server
-go run . list-tools --transport direct --server-bin /path/to/open-computer-use
-go run . call list_apps --transport direct --server-bin /path/to/open-computer-use
-go run . call-seq --transport direct --server-bin /path/to/open-computer-use --calls-file /tmp/calls.json
+go run . list-tools --transport direct --server-bin /path/to/overseer-computer-use
+go run . call list_apps --transport direct --server-bin /path/to/overseer-computer-use
+go run . call-seq --transport direct --server-bin /path/to/overseer-computer-use --calls-file /tmp/calls.json
 ```
 
 Flags can appear either before or after the tool name for `call`:
@@ -119,19 +119,19 @@ go run . list-tools --transport app-server
 
 ## Verified behavior in this workspace
 
-- Direct mode successfully connects to the local `open-computer-use` stdio server and can both `list-tools` and `call list_apps`.
+- Direct mode successfully connects to the local `overseer-computer-use` stdio server and can both `list-tools` and `call list_apps`.
 - Direct mode against the official bundled proprietary `computer-use` exits during initialization when launched outside Codex.
 - That same failure reproduces with the official Go SDK example client `examples/client/listfeatures`, so the issue is not specific to this CLI.
 - App-server mode can still list the official bundled `computer-use` tools through a signed Codex binary.
 - As of official bundled `computer-use` `1.0.755`, raw `mcpServer/tool/call` from this external helper can return `Sender process is not authenticated` even though Apple Events/TCC accepts the request. The supported path for official tool calls is a normal Codex agent/tool invocation; this helper should not be treated as a general bypass for the proprietary service-side sender authorization.
 - For local compatibility tests, this CLI now prefers bundled `computer-use` `1.0.750` from the non-quarantined `~/.codex/plugins/computer-use` root and passes the resolved target to `codex app-server` as a temporary MCP override. In this workspace, cache copies with `com.apple.quarantine` can be AppTranslocated and return `Apple event error -1708`; the non-translocated root can call `list_apps`.
 
-Example working invocation against `open-computer-use`:
+Example working invocation against `overseer-computer-use`:
 
 ```bash
 go run . list-tools \
   --transport direct \
-  --server-bin ~/.codex/plugins/cache/open-computer-use-local/open-computer-use/0.3.0/scripts/launch-open-computer-use.sh
+  --server-bin ~/.codex/plugins/cache/overseer-computer-use-local/overseer-computer-use/<version>/open-computer-use/scripts/launch-open-computer-use.sh
 ```
 
 Example working comparison flow against a local repo build:

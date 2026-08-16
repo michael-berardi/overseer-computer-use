@@ -33,7 +33,6 @@ final class SynthesizedCursorGlyphView: NSView {
         didSet { needsDisplay = true }
     }
 
-    private let referenceImage = loadReferenceCursorWindowImage()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -52,40 +51,10 @@ final class SynthesizedCursorGlyphView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-
         NSColor.clear.setFill()
         dirtyRect.fill()
-
-        guard let context = NSGraphicsContext.current?.cgContext else {
-            return
-        }
-
-        if let referenceImage {
-            drawReferenceImage(referenceImage, in: context)
-            return
-        }
-
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
         drawProceduralGlyph(in: context)
-    }
-
-    private func drawReferenceImage(_ image: NSImage, in context: CGContext) {
-        let drawingBodyOffset = drawingVector(from: cursorBodyOffset)
-        let motionCompression = min(hypot(cursorBodyOffset.dx, cursorBodyOffset.dy) * 0.008, 0.018)
-        let pulseCompression = clickProgress * 0.03
-
-        context.saveGState()
-        context.translateBy(
-            x: bounds.midX + drawingBodyOffset.dx,
-            y: bounds.midY + drawingBodyOffset.dy
-        )
-        context.rotate(by: drawingAngle(from: rotation - CursorGlyphCalibration.restingRotation))
-        context.scaleBy(
-            x: 1 - motionCompression - pulseCompression,
-            y: 1 + (pulseCompression * 0.4)
-        )
-        context.translateBy(x: -bounds.midX, y: -bounds.midY)
-        image.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: 1)
-        context.restoreGState()
     }
 
     private func drawProceduralGlyph(in context: CGContext) {
@@ -235,24 +204,3 @@ final class SynthesizedCursorGlyphView: NSView {
     }
 }
 
-private func loadReferenceCursorWindowImage() -> NSImage? {
-    if let bundledReference = Bundle.main.url(
-        forResource: "official-software-cursor-window-252",
-        withExtension: "png"
-    ), let image = NSImage(contentsOf: bundledReference) {
-        return image
-    }
-
-    let fileURL = URL(fileURLWithPath: #filePath).standardizedFileURL
-    let repoRoot = fileURL
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-
-    let referenceURL = repoRoot
-        .appendingPathComponent("docs/references/codex-computer-use-reverse-engineering/assets/extracted-2026-04-19/official-software-cursor-window-252.png")
-
-    return NSImage(contentsOf: referenceURL)
-}

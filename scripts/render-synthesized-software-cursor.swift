@@ -547,7 +547,7 @@ func printUsage() {
       --snapshot-delay <value>
                            Delay before writing --save-png, useful for sampling wobble phases
       --save-png <path>    Save a 2x transparent PNG snapshot of the synthesized overlay
-      --procedural         Render the current code-generated fallback instead of the captured official baseline
+      --procedural         Render the current code-generated cursor geometry
       --no-idle            Disable idle drift
       --no-pulse           Disable periodic click pulse
       --help               Show this message
@@ -557,10 +557,5 @@ func printUsage() {
 }
 
 func loadReferenceCursorWindowImage() -> NSImage? {
-    let scriptURL = URL(fileURLWithPath: #filePath).standardizedFileURL
-    let repoRoot = scriptURL.deletingLastPathComponent().deletingLastPathComponent()
-    let referenceURL = repoRoot
-        .appendingPathComponent("docs/references/codex-computer-use-reverse-engineering/assets/extracted-2026-04-19/official-software-cursor-window-252.png")
-
-    return NSImage(contentsOf: referenceURL)
+    nil
 }

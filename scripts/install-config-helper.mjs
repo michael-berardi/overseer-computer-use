@@ -3,6 +3,8 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
+const legacyMcpServerNames = ["open-codex-computer-use", "open-computer-use"];
+
 function fail(message) {
   process.stderr.write(`${message}\n`);
   process.exit(1);
@@ -214,9 +216,8 @@ function installClaudeMcp(configPath, projectRoot, serverName, commandName) {
   const desiredEntry = {
     type: "stdio",
     command: commandName,
-    args: ["mcp"],
+    args: ["computer-use", "mcp"],
   };
-  const legacyServerName = "open-codex-computer-use";
   const data = readJSONObjectConfig(configPath, `Claude config ${configPath}`);
   const projects = ensureObjectField(data, "projects", 'Existing Claude config has non-object "projects"; refusing to modify it.');
   const projectEntry = ensureObjectField(
@@ -231,24 +232,23 @@ function installClaudeMcp(configPath, projectRoot, serverName, commandName) {
   );
 
   const target = mcpServers[serverName];
-  const legacy = mcpServers[legacyServerName];
+  const legacyMatches = legacyMcpServerNames.filter((name) => name in mcpServers);
   const targetMatches = JSON.stringify(target) === JSON.stringify(desiredEntry);
-  const legacyMatches = JSON.stringify(legacy) === JSON.stringify(desiredEntry);
 
-  if (targetMatches && !legacyMatches) {
+  if (targetMatches && legacyMatches.length === 0) {
     process.stdout.write(`Claude MCP server "${serverName}" is already installed for ${projectRoot} in ${configPath}.\n`);
     return;
   }
 
   mcpServers[serverName] = desiredEntry;
-  if (legacyMatches) {
+  for (const legacyServerName of legacyMatches) {
     delete mcpServers[legacyServerName];
   }
 
   writeJSONConfig(configPath, data);
 
-  if (targetMatches && legacyMatches) {
-    process.stdout.write(`Claude MCP server "${serverName}" was already installed for ${projectRoot}; removed legacy alias "${legacyServerName}" from ${configPath}.\n`);
+  if (targetMatches && legacyMatches.length > 0) {
+    process.stdout.write(`Claude MCP server "${serverName}" was already installed for ${projectRoot}; removed legacy aliases "${legacyMatches.join('", "')}" from ${configPath}.\n`);
   } else {
     process.stdout.write(`Installed Claude MCP server "${serverName}" for ${projectRoot} into ${configPath}.\n`);
   }
@@ -257,9 +257,8 @@ function installClaudeMcp(configPath, projectRoot, serverName, commandName) {
 function installGeminiMcp(configPath, serverName, commandName) {
   const desiredEntry = {
     command: commandName,
-    args: ["mcp"],
+    args: ["computer-use", "mcp"],
   };
-  const legacyServerName = "open-codex-computer-use";
   const data = readJSONObjectConfig(configPath, `Gemini config ${configPath}`);
   const mcpServers = ensureObjectField(
     data,
@@ -268,24 +267,23 @@ function installGeminiMcp(configPath, serverName, commandName) {
   );
 
   const target = mcpServers[serverName];
-  const legacy = mcpServers[legacyServerName];
+  const legacyMatches = legacyMcpServerNames.filter((name) => name in mcpServers);
   const targetMatches = JSON.stringify(target) === JSON.stringify(desiredEntry);
-  const legacyMatches = JSON.stringify(legacy) === JSON.stringify(desiredEntry);
 
-  if (targetMatches && !legacyMatches) {
+  if (targetMatches && legacyMatches.length === 0) {
     process.stdout.write(`Gemini MCP server "${serverName}" is already installed in ${configPath}.\n`);
     return;
   }
 
   mcpServers[serverName] = desiredEntry;
-  if (legacyMatches) {
+  for (const legacyServerName of legacyMatches) {
     delete mcpServers[legacyServerName];
   }
 
   writeJSONConfig(configPath, data);
 
-  if (targetMatches && legacyMatches) {
-    process.stdout.write(`Gemini MCP server "${serverName}" was already installed; removed legacy alias "${legacyServerName}" from ${configPath}.\n`);
+  if (targetMatches && legacyMatches.length > 0) {
+    process.stdout.write(`Gemini MCP server "${serverName}" was already installed; removed legacy aliases "${legacyMatches.join('", "')}" from ${configPath}.\n`);
   } else {
     process.stdout.write(`Installed Gemini MCP server "${serverName}" into ${configPath}.\n`);
   }
@@ -294,9 +292,8 @@ function installGeminiMcp(configPath, serverName, commandName) {
 function installOpencodeMcp(primaryConfigPath, secondaryConfigPath, serverName, commandName) {
   const desiredEntry = {
     type: "local",
-    command: [commandName, "mcp"],
+    command: [commandName, "computer-use", "mcp"],
   };
-  const legacyServerName = "open-codex-computer-use";
   const configEntries = [{ path: primaryConfigPath, role: "primary" }];
   if (secondaryConfigPath && secondaryConfigPath !== primaryConfigPath) {
     configEntries.push({ path: secondaryConfigPath, role: "secondary" });
@@ -310,6 +307,7 @@ function installOpencodeMcp(primaryConfigPath, secondaryConfigPath, serverName, 
 
   const targetMatches = [];
   const extraAliases = [];
+  let hasLegacyAlias = false;
   for (const record of records) {
     const mcp = getOptionalObjectField(
       record.data,
@@ -323,12 +321,15 @@ function installOpencodeMcp(primaryConfigPath, secondaryConfigPath, serverName, 
     if (JSON.stringify(mcp[serverName]) === JSON.stringify(desiredEntry)) {
       targetMatches.push(record.path);
     }
-    if (serverName in mcp || legacyServerName in mcp) {
+    if (serverName in mcp || legacyMcpServerNames.some((name) => name in mcp)) {
       extraAliases.push(record.path);
+    }
+    if (legacyMcpServerNames.some((name) => name in mcp)) {
+      hasLegacyAlias = true;
     }
   }
 
-  if (targetMatches.length === 1 && extraAliases.length === 1 && targetMatches[0] === extraAliases[0]) {
+  if (targetMatches.length === 1 && extraAliases.length === 1 && targetMatches[0] === extraAliases[0] && !hasLegacyAlias) {
     process.stdout.write(`opencode MCP server "${serverName}" is already installed in ${targetMatches[0]}.\n`);
     return;
   }
@@ -345,9 +346,11 @@ function installOpencodeMcp(primaryConfigPath, secondaryConfigPath, serverName, 
         mcp[serverName] = desiredEntry;
         record.dirty = true;
       }
-      if (legacyServerName in mcp) {
-        delete mcp[legacyServerName];
-        record.dirty = true;
+      for (const legacyServerName of legacyMcpServerNames) {
+        if (legacyServerName in mcp) {
+          delete mcp[legacyServerName];
+          record.dirty = true;
+        }
       }
       continue;
     }
@@ -356,9 +359,11 @@ function installOpencodeMcp(primaryConfigPath, secondaryConfigPath, serverName, 
       delete mcp[serverName];
       record.dirty = true;
     }
-    if (legacyServerName in mcp) {
-      delete mcp[legacyServerName];
-      record.dirty = true;
+    for (const legacyServerName of legacyMcpServerNames) {
+      if (legacyServerName in mcp) {
+        delete mcp[legacyServerName];
+        record.dirty = true;
+      }
     }
     if (Object.keys(mcp).length === 0) {
       delete record.data.mcp;
@@ -375,22 +380,23 @@ function installOpencodeMcp(primaryConfigPath, secondaryConfigPath, serverName, 
 }
 
 function installCodexMcp(configPath, serverName, commandName) {
-  const desiredBody = `command = ${JSON.stringify(commandName)}\nargs = ["mcp"]`;
+  const desiredBody = `command = ${JSON.stringify(commandName)}\nargs = ["computer-use", "mcp"]`;
   const targetHeader = `mcp_servers."${serverName}"`;
-  const legacyServerName = "open-codex-computer-use";
-  const legacyHeader = `mcp_servers."${legacyServerName}"`;
+  const legacyHeaders = legacyMcpServerNames.map((name) => `mcp_servers."${name}"`);
   const text = readTextIfExists(configPath);
   const document = splitTomlSections(text);
 
-  ensureUniqueManagedHeaders(document, [targetHeader, legacyHeader], configPath);
+  ensureUniqueManagedHeaders(document, [targetHeader, ...legacyHeaders], configPath);
 
   const targetSection = document.sections.find((section) => section.header === targetHeader);
-  const legacySection = document.sections.find((section) => section.header === legacyHeader);
   const desiredCanonical = canonicalSectionBody(desiredBody.split("\n"));
   const targetMatches = targetSection ? canonicalSectionBody(targetSection.bodyLines) === desiredCanonical : false;
-  const legacyMatches = legacySection ? canonicalSectionBody(legacySection.bodyLines) === desiredCanonical : false;
+  const legacyMatches = legacyHeaders.filter((header) => {
+    const section = document.sections.find((candidate) => candidate.header === header);
+    return section ? canonicalSectionBody(section.bodyLines) === desiredCanonical : false;
+  });
 
-  if (targetMatches && !legacyMatches) {
+  if (targetMatches && legacyMatches.length === 0) {
     process.stdout.write(`Codex MCP server "${serverName}" is already installed in ${configPath}.\n`);
     return;
   }
@@ -398,7 +404,7 @@ function installCodexMcp(configPath, serverName, commandName) {
   const nextText = applyTomlSectionUpdates(
     text,
     {
-      removeHeaders: [legacyHeader],
+      removeHeaders: legacyHeaders,
       upserts: [{ header: targetHeader, body: desiredBody }],
     },
     configPath,
@@ -407,8 +413,8 @@ function installCodexMcp(configPath, serverName, commandName) {
   ensureParentDir(configPath);
   writeFileSync(configPath, nextText, "utf8");
 
-  if (targetMatches && legacyMatches) {
-    process.stdout.write(`Codex MCP server "${serverName}" was already installed; removed legacy alias "${legacyServerName}" from ${configPath}.\n`);
+  if (targetMatches && legacyMatches.length > 0) {
+    process.stdout.write(`Codex MCP server "${serverName}" was already installed; removed legacy aliases "${legacyMatches.join('", "')}" from ${configPath}.\n`);
   } else {
     process.stdout.write(`Installed Codex MCP server "${serverName}" into ${configPath}.\n`);
   }
@@ -438,6 +444,8 @@ function installCodexPluginConfig(configPath, repoRoot, marketplaceName, pluginN
       removeHeaders: [
         'mcp_servers."open-codex-computer-use"',
         'mcp_servers."open-computer-use"',
+        'marketplaces.open-computer-use-local',
+        'plugins."open-computer-use@open-computer-use-local"',
       ],
       upserts: [
         {

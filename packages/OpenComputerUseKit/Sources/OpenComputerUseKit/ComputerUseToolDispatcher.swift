@@ -40,9 +40,14 @@ private func normalizedElementIndexNumber(_ value: Double) -> String? {
 
 public final class ComputerUseToolDispatcher {
     private let service: ComputerUseService
+    private let telemetry: TelemetryCoordinator
 
-    public init(service: ComputerUseService = ComputerUseService()) {
+    public init(
+        service: ComputerUseService = ComputerUseService(),
+        telemetry: TelemetryCoordinator = TelemetryCoordinator()
+    ) {
         self.service = service
+        self.telemetry = telemetry
     }
 
     public func callTool(name: String, arguments: [String: Any]) throws -> ToolCallResult {
@@ -130,15 +135,20 @@ public final class ComputerUseToolDispatcher {
             try ToolSchemaValidator.validate(tool: name, arguments: arguments)
         } catch {
             let info = computerUseErrorInfo(for: error, phase: .preflight, callIndex: callIndex)
-            return ToolCallResult.text(info.message, errorInfo: info)
+            let result = ToolCallResult.text(info.message, errorInfo: info)
+            telemetry.recordToolResult(toolName: name, succeeded: false)
+            return result
         }
 
+        let result: ToolCallResult
         do {
-            return try callTool(name: name, arguments: arguments)
+            result = try callTool(name: name, arguments: arguments)
         } catch {
             let info = computerUseErrorInfo(for: error, phase: .execute, callIndex: callIndex)
-            return ToolCallResult.text(info.message, errorInfo: info)
+            result = ToolCallResult.text(info.message, errorInfo: info)
         }
+        telemetry.recordToolResult(toolName: name, succeeded: !result.isError)
+        return result
     }
 
     private func requireString(_ key: String, in arguments: [String: Any]) throws -> String {

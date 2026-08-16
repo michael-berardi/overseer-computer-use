@@ -1,4 +1,8 @@
 # Third-Party Notices
+## Upstream lineage
+
+Overseer Computer Use began from `iFurySt/open-codex-computer-use`. The upstream MIT attribution and license remain in this repository. The current public fork intentionally diverges in product identity, bundle signing, permission onboarding, opt-in telemetry, updater safety, generic agent installation, and removal of proprietary extracted assets. Maintainers should review upstream changes periodically and record any ported fix or intentional divergence; no upstream binary or artwork is redistributed.
+
 
 ## Cua Driver
 

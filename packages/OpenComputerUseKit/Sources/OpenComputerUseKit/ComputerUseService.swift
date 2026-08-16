@@ -1983,7 +1983,7 @@ public final class ComputerUseService {
 
         let appReference = snapshot.app.bundleIdentifier ?? snapshot.app.name
         fputs(
-            "[open-computer-use] global pointer fallback tool=\(tool) app=\(appReference) target=\(targetDescription)\n",
+            "[overseer-computer-use] global pointer fallback tool=\(tool) app=\(appReference) target=\(targetDescription)\n",
             stderr
         )
     }
@@ -1993,7 +1993,7 @@ public final class ComputerUseService {
             return
         }
 
-        fputs("[open-computer-use] click decision \(message)\n", stderr)
+        fputs("[overseer-computer-use] click decision \(message)\n", stderr)
     }
 
     private func clickDebugDescription(_ record: ElementRecord) -> String {

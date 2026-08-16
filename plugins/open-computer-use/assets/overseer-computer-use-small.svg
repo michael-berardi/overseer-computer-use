@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Overseer Computer Use">
+  <rect width="64" height="64" rx="14" fill="#0B0B0F"/>
+  <path d="M15 32a17 17 0 1 1 34 0" fill="none" stroke="#F4F1EA" stroke-width="4" stroke-linecap="round"/>
+  <path d="M22 32a10 10 0 1 1 20 0" fill="none" stroke="#8B5CF6" stroke-width="3" stroke-linecap="round"/>
+  <path d="M32 17v30M17 32h30" fill="none" stroke="#38383D" stroke-width="1"/>
+  <circle cx="32" cy="32" r="3" fill="#F4F1EA"/>
+</svg>

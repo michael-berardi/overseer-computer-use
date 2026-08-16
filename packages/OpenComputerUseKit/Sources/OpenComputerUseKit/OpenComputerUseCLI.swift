@@ -1,9 +1,16 @@
 import Foundation
 
+public enum OpenComputerUseTelemetryAction: String, Equatable {
+    case status
+    case enable
+    case disable
+}
+
 public enum OpenComputerUseCLICommand: Equatable {
     case launchOnboarding
     case mcp
     case doctor(statusOnly: Bool, json: Bool)
+    case telemetry(OpenComputerUseTelemetryAction)
     case listApps
     case targets(runningOnly: Bool, json: Bool)
     case tools(name: String?, json: Bool)
@@ -41,8 +48,8 @@ public func shouldUseMacOSAppAgentProxy(
         // Status-only doctor only prints diagnostics; it must never touch
         // the app agent (which may present onboarding UI).
         return !statusOnly
-    case .tools:
-        // Static catalog; never needs the app agent.
+    case .tools, .telemetry:
+        // Local-only commands; never need the app agent.
         return false
     case .mcp, .listApps, .targets, .inspect, .snapshot, .call:
         return true
@@ -92,6 +99,8 @@ public func parseOpenComputerUseCLI(arguments: [String]) throws -> OpenComputerU
         return try parseSimpleCommand(name: "mcp", arguments: Array(arguments.dropFirst()), result: .mcp)
     case "doctor":
         return try parseDoctor(arguments: Array(arguments.dropFirst()))
+    case "telemetry":
+        return try parseTelemetry(arguments: Array(arguments.dropFirst()))
     case "list-apps":
         return try parseSimpleCommand(name: "list-apps", arguments: Array(arguments.dropFirst()), result: .listApps)
     case "targets":
@@ -123,15 +132,16 @@ public func openComputerUseHelpText(command: String? = nil) -> String {
     switch command {
     case nil:
         return """
-        Open Computer Use
+        Overseer Computer Use
 
         Usage:
-          open-computer-use [command] [options]
-          open-computer-use
+          overseer computer-use [command] [options]
+          overseer computer-use
 
         Commands:
           mcp                  Start the stdio MCP server.
           doctor               Print permission status and launch onboarding if needed.
+          telemetry <action>   Show, enable, or disable optional anonymous telemetry.
           list-apps            Print running or recently used apps.
           targets              Print targetable apps (JSON-capable, running-only filter).
           tools [name]         Print tool definitions or one tool's schema.
@@ -150,19 +160,19 @@ public func openComputerUseHelpText(command: String? = nil) -> String {
 
         Notes:
           Running without a command launches the permission onboarding app.
-          Use `open-computer-use help <command>` for command-specific help.
+          Use `overseer computer-use help <command>` for command-specific help.
         """
     case "mcp":
         return """
         Usage:
-          open-computer-use mcp
+          overseer computer-use mcp
 
         Start the stdio MCP server.
         """
     case "doctor":
         return """
         Usage:
-          open-computer-use doctor [--status-only] [--json]
+          overseer computer-use doctor [--status-only] [--json]
 
         Options:
           --status-only        Only print the permission state. Never launches the
@@ -172,10 +182,21 @@ public func openComputerUseHelpText(command: String? = nil) -> String {
         Print the current Accessibility and Screen Recording permission state.
         Without --status-only, missing permissions also launch the onboarding app.
         """
+    case "telemetry":
+        return """
+        Usage:
+          overseer computer-use telemetry status
+          overseer computer-use telemetry enable
+          overseer computer-use telemetry disable
+
+        Optional telemetry is off until explicitly enabled. Disabling deletes the
+        local random installation ID, queued counters, and cadence markers.
+        """
+        
     case "targets":
         return """
         Usage:
-          open-computer-use targets [--running-only] [--json]
+          overseer computer-use targets [--running-only] [--json]
 
         Options:
           --running-only       Only include apps that are currently running.
@@ -187,8 +208,8 @@ public func openComputerUseHelpText(command: String? = nil) -> String {
     case "tools":
         return """
         Usage:
-          open-computer-use tools [--json]
-          open-computer-use tools <name> [--json]
+          overseer computer-use tools [--json]
+          overseer computer-use tools <name> [--json]
 
         Arguments:
           <name>               Optional tool name to inspect (for example click).
@@ -202,7 +223,7 @@ public func openComputerUseHelpText(command: String? = nil) -> String {
     case "inspect":
         return """
         Usage:
-          open-computer-use inspect [--json] [--window <title>] [--media-dir <path>] [--no-launch] [--no-activate] <app>
+          overseer computer-use inspect [--json] [--window <title>] [--media-dir <path>] [--no-launch] [--no-activate] <app>
 
         Arguments:
           <app>                App name, bundle identifier, pid:<pid>, or a bare pid.
@@ -222,14 +243,14 @@ public func openComputerUseHelpText(command: String? = nil) -> String {
     case "list-apps":
         return """
         Usage:
-          open-computer-use list-apps
+          overseer computer-use list-apps
 
         Print running apps plus recently used apps that can be targeted by Computer Use.
         """
     case "snapshot":
         return """
         Usage:
-          open-computer-use snapshot [--text-limit <positive-int|max>] [--max-tree-nodes <positive-int>] [--max-tree-depth <positive-int>] <app>
+          overseer computer-use snapshot [--text-limit <positive-int|max>] [--max-tree-nodes <positive-int>] [--max-tree-depth <positive-int>] <app>
 
         Arguments:
           <app>                App name or bundle identifier to inspect.
@@ -244,16 +265,16 @@ public func openComputerUseHelpText(command: String? = nil) -> String {
     case "call":
         return """
         Usage:
-          open-computer-use call <tool> [--args '<json-object>']
-          open-computer-use call <tool> [--args-file <path>]
-          open-computer-use call --calls '<json-array>' [--sleep <seconds>]
-          open-computer-use call --calls-file <path> [--sleep <seconds>]
+          overseer computer-use call <tool> [--args '<json-object>']
+          overseer computer-use call <tool> [--args-file <path>]
+          overseer computer-use call --calls '<json-array>' [--sleep <seconds>]
+          overseer computer-use call --calls-file <path> [--sleep <seconds>]
 
         Examples:
-          open-computer-use call list_apps
-          open-computer-use call get_app_state --args '{"app":"TextEdit"}'
-          open-computer-use call --calls '[{"tool":"get_app_state","args":{"app":"TextEdit"}},{"tool":"press_key","args":{"app":"TextEdit","key":"Return"}}]'
-          open-computer-use call --calls-file examples/textedit-overlay-seq.json --sleep 0.5
+          overseer computer-use call list_apps
+          overseer computer-use call get_app_state --args '{"app":"TextEdit"}'
+          overseer computer-use call --calls '[{"tool":"get_app_state","args":{"app":"TextEdit"}},{"tool":"press_key","args":{"app":"TextEdit","key":"Return"}}]'
+          overseer computer-use call --calls-file examples/textedit-overlay-seq.json --sleep 0.5
 
         The JSON array form keeps all calls in one process so follow-up actions
         can reuse the app state and element indices captured by get_app_state.
@@ -263,7 +284,7 @@ public func openComputerUseHelpText(command: String? = nil) -> String {
     case "preview":
         return """
         Usage:
-          open-computer-use preview [--output-dir <path>] [--duration <seconds>] [--fps <1-60>] [--max-width <px>] [--quality <0.05-1>] [--include-cursor] <app>
+          overseer computer-use preview [--output-dir <path>] [--duration <seconds>] [--fps <1-60>] [--max-width <px>] [--quality <0.05-1>] [--include-cursor] <app>
 
         Arguments:
           <app>                App name or bundle identifier to capture. The app must already be
@@ -285,7 +306,7 @@ public func openComputerUseHelpText(command: String? = nil) -> String {
     case "record":
         return """
         Usage:
-          open-computer-use record [--output <path>] [--duration <seconds>] [--fps <1-60>] [--max-width <px>] [--bitrate <bps>] [--include-cursor] <app>
+          overseer computer-use record [--output <path>] [--duration <seconds>] [--fps <1-60>] [--max-width <px>] [--bitrate <bps>] [--include-cursor] <app>
 
         Arguments:
           <app>                App name or bundle identifier to capture. The app must already be
@@ -307,24 +328,24 @@ public func openComputerUseHelpText(command: String? = nil) -> String {
     case "turn-ended":
         return """
         Usage:
-          open-computer-use turn-ended [--previous-notify <argv>] [payload]
+          overseer computer-use turn-ended [--previous-notify <argv>] [payload]
 
         Notify a running local MCP process that the current host turn has ended.
-        Codex legacy notify appends the after-agent JSON payload as the last argument.
+        Some legacy hosts append a JSON payload as the last argument.
         """
     case "version":
         return """
         Usage:
-          open-computer-use version
-          open-computer-use --version
-          open-computer-use -v
+          overseer computer-use version
+          overseer computer-use --version
+          overseer computer-use -v
 
         Print the CLI version.
         """
     case "help":
         return """
         Usage:
-          open-computer-use help [command]
+          overseer computer-use help [command]
 
         Show general help or help for a specific command.
         """
@@ -368,7 +389,7 @@ private func parseDoctor(arguments: [String]) throws -> OpenComputerUseCLIComman
         case "--json":
             json = true
         case "-h", "--help":
-            throw OpenComputerUseCLIError(message: "doctor help must be requested as `open-computer-use doctor --help`", helpCommand: "doctor")
+            throw OpenComputerUseCLIError(message: "doctor help must be requested as `overseer computer-use doctor --help`", helpCommand: "doctor")
         default:
             throw OpenComputerUseCLIError(message: "Unknown doctor option: \(argument)", helpCommand: "doctor")
         }
@@ -392,7 +413,7 @@ private func parseTargets(arguments: [String]) throws -> OpenComputerUseCLIComma
         case "--json":
             json = true
         case "-h", "--help":
-            throw OpenComputerUseCLIError(message: "targets help must be requested as `open-computer-use targets --help`", helpCommand: "targets")
+            throw OpenComputerUseCLIError(message: "targets help must be requested as `overseer computer-use targets --help`", helpCommand: "targets")
         default:
             throw OpenComputerUseCLIError(message: "Unknown targets option: \(argument)", helpCommand: "targets")
         }
@@ -414,7 +435,7 @@ private func parseTools(arguments: [String]) throws -> OpenComputerUseCLICommand
         case "--json":
             json = true
         case "-h", "--help":
-            throw OpenComputerUseCLIError(message: "tools help must be requested as `open-computer-use tools --help`", helpCommand: "tools")
+            throw OpenComputerUseCLIError(message: "tools help must be requested as `overseer computer-use tools --help`", helpCommand: "tools")
         default:
             if argument.hasPrefix("-") {
                 throw OpenComputerUseCLIError(message: "Unknown tools option: \(argument)", helpCommand: "tools")
@@ -461,7 +482,7 @@ private func parseInspect(arguments: [String]) throws -> OpenComputerUseCLIComma
         case "--window":
             windowTitle = try parseOptionValue("--window", arguments: arguments, index: &index, helpCommand: "inspect")
         case "-h", "--help":
-            throw OpenComputerUseCLIError(message: "inspect help must be requested as `open-computer-use inspect --help`", helpCommand: "inspect")
+            throw OpenComputerUseCLIError(message: "inspect help must be requested as `overseer computer-use inspect --help`", helpCommand: "inspect")
         default:
             if argument.hasPrefix("-") {
                 throw OpenComputerUseCLIError(message: "Unknown inspect option: \(argument)", helpCommand: "inspect")
@@ -502,7 +523,7 @@ private func parseTurnEnded(arguments: [String]) throws -> OpenComputerUseCLICom
             }
             index = valueIndex
         case "-h", "--help":
-            throw OpenComputerUseCLIError(message: "turn-ended help must be requested as `open-computer-use turn-ended --help`", helpCommand: "turn-ended")
+            throw OpenComputerUseCLIError(message: "turn-ended help must be requested as `overseer computer-use turn-ended --help`", helpCommand: "turn-ended")
         default:
             if argument.hasPrefix("-") {
                 throw OpenComputerUseCLIError(message: "Unknown turn-ended option: \(argument)", helpCommand: "turn-ended")
@@ -558,7 +579,7 @@ private func parseSnapshot(arguments: [String]) throws -> OpenComputerUseCLIComm
             }
             maxTreeDepth = try parsePositiveIntegerOption(arguments[index], option: "--max-tree-depth")
         case "-h", "--help":
-            throw OpenComputerUseCLIError(message: "snapshot help must be requested as `open-computer-use snapshot --help`", helpCommand: "snapshot")
+            throw OpenComputerUseCLIError(message: "snapshot help must be requested as `overseer computer-use snapshot --help`", helpCommand: "snapshot")
         default:
             if argument.hasPrefix("-") {
                 throw OpenComputerUseCLIError(message: "Unknown snapshot option: \(argument)", helpCommand: "snapshot")
@@ -585,6 +606,21 @@ private func parseSnapshot(arguments: [String]) throws -> OpenComputerUseCLIComm
             maxDepth: maxTreeDepth
         )
     )
+}
+
+private func parseTelemetry(arguments: [String]) throws -> OpenComputerUseCLICommand {
+    if arguments == ["--help"] || arguments == ["-h"] {
+        return .help(command: "telemetry")
+    }
+    guard arguments.count == 1,
+          let raw = arguments.first,
+          let action = OpenComputerUseTelemetryAction(rawValue: raw) else {
+        throw OpenComputerUseCLIError(
+            message: "telemetry requires exactly one action: status, enable, or disable",
+            helpCommand: "telemetry"
+        )
+    }
+    return .telemetry(action)
 }
 
 private func parsePreview(arguments: [String]) throws -> OpenComputerUseCLICommand {
@@ -617,7 +653,7 @@ private func parsePreview(arguments: [String]) throws -> OpenComputerUseCLIComma
         case "--include-cursor":
             includeCursor = true
         case "-h", "--help":
-            throw OpenComputerUseCLIError(message: "preview help must be requested as `open-computer-use preview --help`", helpCommand: "preview")
+            throw OpenComputerUseCLIError(message: "preview help must be requested as `overseer computer-use preview --help`", helpCommand: "preview")
         default:
             if argument.hasPrefix("-") {
                 throw OpenComputerUseCLIError(message: "Unknown preview option: \(argument)", helpCommand: "preview")
@@ -682,7 +718,7 @@ private func parseRecord(arguments: [String]) throws -> OpenComputerUseCLIComman
         case "--include-cursor":
             includeCursor = true
         case "-h", "--help":
-            throw OpenComputerUseCLIError(message: "record help must be requested as `open-computer-use record --help`", helpCommand: "record")
+            throw OpenComputerUseCLIError(message: "record help must be requested as `overseer computer-use record --help`", helpCommand: "record")
         default:
             if argument.hasPrefix("-") {
                 throw OpenComputerUseCLIError(message: "Unknown record option: \(argument)", helpCommand: "record")
@@ -804,7 +840,7 @@ private func parseCall(arguments: [String]) throws -> OpenComputerUseCLICommand 
         case "--sleep":
             interCallDelay = try parseTimeIntervalOptionValue("--sleep", arguments: arguments, index: &index)
         case "-h", "--help":
-            throw OpenComputerUseCLIError(message: "call help must be requested as `open-computer-use call --help`", helpCommand: "call")
+            throw OpenComputerUseCLIError(message: "call help must be requested as `overseer computer-use call --help`", helpCommand: "call")
         default:
             if argument.hasPrefix("-") {
                 throw OpenComputerUseCLIError(message: "Unknown call option: \(argument)", helpCommand: "call")

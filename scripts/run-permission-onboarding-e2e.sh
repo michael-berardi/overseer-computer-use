@@ -12,13 +12,14 @@ cd "${repo_root}"
 if [[ -z "${OPEN_COMPUTER_USE_E2E_CLI:-}" ]]; then
   swift build --product OpenComputerUse
 fi
-
+cli_prefix=()
 if [[ ! -x "${cli}" ]]; then
-  if command -v open-computer-use >/dev/null 2>&1; then
-    cli="$(command -v open-computer-use)"
+  if command -v overseer >/dev/null 2>&1; then
+    cli="$(command -v overseer)"
+    cli_prefix=(computer-use)
   else
     echo "Missing executable: ${cli}" >&2
-    echo "Run swift build first, or set OPEN_COMPUTER_USE_E2E_CLI=/path/to/open-computer-use." >&2
+    echo "Run swift build first, or set OPEN_COMPUTER_USE_E2E_CLI=/path/to/overseer." >&2
     exit 1
   fi
 fi
@@ -33,12 +34,12 @@ echo "Using CLI: ${cli}"
 if [[ "${disable_app_agent_proxy}" == "1" || "${disable_app_agent_proxy}" == "true" || "${disable_app_agent_proxy}" == "yes" ]]; then
   echo "Using direct CLI permission checks (app-agent proxy disabled for this E2E)."
   run_cli() {
-    OPEN_COMPUTER_USE_DISABLE_APP_AGENT_PROXY=1 "${cli}" "$@"
+    OPEN_COMPUTER_USE_DISABLE_APP_AGENT_PROXY=1 "${cli}" "${cli_prefix[@]}" "$@"
   }
 else
   echo "Using default CLI app-agent proxy behavior."
   run_cli() {
-    "${cli}" "$@"
+    "${cli}" "${cli_prefix[@]}" "$@"
   }
 fi
 

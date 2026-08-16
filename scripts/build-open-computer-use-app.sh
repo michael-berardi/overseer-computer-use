@@ -10,6 +10,7 @@ codesign_identity="${OPEN_COMPUTER_USE_CODESIGN_IDENTITY:-}"
 codesign_keychain="${OPEN_COMPUTER_USE_CODESIGN_KEYCHAIN:-}"
 notarytool_profile="${OPEN_COMPUTER_USE_NOTARYTOOL_PROFILE:-}"
 install_app_path="${OPEN_COMPUTER_USE_INSTALL_APP_PATH:-}"
+team_identifier="T63VT9UAY2"
 
 usage() {
   cat <<'EOF'
@@ -18,13 +19,13 @@ Usage: ./scripts/build-open-computer-use-app.sh [debug|release] [--configuration
 Examples:
   ./scripts/build-open-computer-use-app.sh debug
   ./scripts/build-open-computer-use-app.sh --configuration release --arch universal
-
 Environment:
   OPEN_COMPUTER_USE_CODESIGN_MODE=auto|identity|adhoc|none
-  OPEN_COMPUTER_USE_CODESIGN_IDENTITY="Developer ID Application: Example, Inc. (TEAMID)"
+  OPEN_COMPUTER_USE_LOCAL_DEVELOPMENT=1  (required for ad-hoc/unsigned debug builds)
+  OPEN_COMPUTER_USE_CODESIGN_IDENTITY="Developer ID Application: Team (T63VT9UAY2)"
   OPEN_COMPUTER_USE_CODESIGN_KEYCHAIN=/path/to/signing.keychain-db
   OPEN_COMPUTER_USE_NOTARYTOOL_PROFILE=profile
-  OPEN_COMPUTER_USE_INSTALL_APP_PATH=/path/to/Open Computer Use.app
+  OPEN_COMPUTER_USE_INSTALL_APP_PATH=/path/to/Overseer Computer Use.app
 EOF
 }
 
@@ -167,9 +168,17 @@ run_with_codesign_keychain() {
 resolve_codesign_identity() {
   case "${codesign_mode}" in
     none)
+      if [[ "${app_variant}" != "dev" || "${OPEN_COMPUTER_USE_LOCAL_DEVELOPMENT:-0}" != "1" ]]; then
+        echo "Unsigned builds are development-only; set OPEN_COMPUTER_USE_LOCAL_DEVELOPMENT=1 for a local debug build." >&2
+        exit 1
+      fi
       return 1
       ;;
     adhoc)
+      if [[ "${app_variant}" != "dev" || "${OPEN_COMPUTER_USE_LOCAL_DEVELOPMENT:-0}" != "1" ]]; then
+        echo "Ad-hoc signing is development-only; set OPEN_COMPUTER_USE_LOCAL_DEVELOPMENT=1 for a local debug build." >&2
+        exit 1
+      fi
       printf '%s\n' "-"
       return 0
       ;;
@@ -178,11 +187,19 @@ resolve_codesign_identity() {
         echo "OPEN_COMPUTER_USE_CODESIGN_IDENTITY is required when OPEN_COMPUTER_USE_CODESIGN_MODE=identity" >&2
         exit 1
       fi
+      if [[ "${app_variant}" == "release" && ( "${codesign_identity}" != "Developer ID Application:"* || "${codesign_identity}" != *"(${team_identifier})" ) ]]; then
+        echo "Release app must use a Developer ID Application identity for team ${team_identifier}." >&2
+        exit 1
+      fi
       printf '%s\n' "${codesign_identity}"
       return 0
       ;;
     auto)
       if [[ -n "${codesign_identity}" ]]; then
+        if [[ "${app_variant}" == "release" && ( "${codesign_identity}" != "Developer ID Application:"* || "${codesign_identity}" != *"(${team_identifier})" ) ]]; then
+          echo "Release app must use a Developer ID Application identity for team ${team_identifier}." >&2
+          exit 1
+        fi
         printf '%s\n' "${codesign_identity}"
         return 0
       fi
@@ -190,18 +207,18 @@ resolve_codesign_identity() {
       local discovered_identity
       discovered_identity="$(find_codesign_identity "Developer ID Application")"
       if [[ -n "${discovered_identity}" ]]; then
-        printf '%s\n' "${discovered_identity}"
-        return 0
+        if [[ "${discovered_identity}" == *"(${team_identifier})" ]]; then
+          printf '%s\n' "${discovered_identity}"
+          return 0
+        fi
       fi
 
-      discovered_identity="$(find_codesign_identity "Apple Development")"
-      if [[ -n "${discovered_identity}" ]]; then
-        printf '%s\n' "${discovered_identity}"
-        return 0
+      if [[ "${app_variant}" == "dev" && "${OPEN_COMPUTER_USE_LOCAL_DEVELOPMENT:-0}" == "1" ]]; then
+        echo "No Developer ID identity found; use OPEN_COMPUTER_USE_CODESIGN_MODE=adhoc explicitly for local development." >&2
+      else
+        echo "No Developer ID Application identity for team ${team_identifier} found." >&2
       fi
-
-      printf '%s\n' "-"
-      return 0
+      exit 1
       ;;
   esac
 }
@@ -240,6 +257,10 @@ notarize_app_bundle() {
   local app_path="${1:-}"
 
   if [[ -z "${notarytool_profile}" ]]; then
+    if [[ "${app_variant}" == "release" ]]; then
+      echo "OPEN_COMPUTER_USE_NOTARYTOOL_PROFILE is required for a public release." >&2
+      exit 1
+    fi
     return
   fi
 
@@ -247,9 +268,28 @@ notarize_app_bundle() {
   submission_archive="$(mktemp "${TMPDIR:-/tmp}/open-computer-use-notary.XXXXXX.zip")"
   ditto -c -k --sequesterRsrc --keepParent "${app_path}" "${submission_archive}"
   xcrun notarytool submit "${submission_archive}" --keychain-profile "${notarytool_profile}" --wait
+
   rm -f "${submission_archive}"
   xcrun stapler staple "${app_path}"
   xcrun stapler validate "${app_path}"
+}
+
+verify_release_signing() {
+  local app_path="${1:-}"
+  [[ "${app_variant}" == "release" ]] || return 0
+  local details
+  details="$(codesign -dv --verbose=4 "${app_path}" 2>&1)"
+  case "${details}" in
+    *"TeamIdentifier=${team_identifier}"*) ;;
+    *) echo "Release signature team does not match ${team_identifier}." >&2; exit 1 ;;
+  esac
+  local requirement
+  requirement="$(codesign -dr - "${app_path}" 2>&1 || true)"
+  if [[ "${requirement}" != *'identifier "com.libertydesignstudio.overseer-computer-use"'* ||
+        "${requirement}" != *"certificate leaf[subject.OU] = \"${team_identifier}\""* ]]; then
+    echo "Release designated requirement must bind bundle com.libertydesignstudio.overseer-computer-use to team ${team_identifier}." >&2
+    exit 1
+  fi
 }
 
 install_app_bundle() {
@@ -278,22 +318,20 @@ cd "${repo_root}"
 
 package_version="$(read_package_version)"
 bundle_version="${OPEN_COMPUTER_USE_BUNDLE_VERSION:-$(git -C "${repo_root}" rev-list --count HEAD 2>/dev/null || echo 1)}"
-release_app_bundle_name="Open Computer Use.app"
-development_app_bundle_name="Open Computer Use (Dev).app"
-legacy_app_bundle_name="OpenComputerUse.app"
-bundle_icon_name="OpenComputerUse.icns"
-icon_master_png="${repo_root}/assets/app-icons/open-computer-use-1024.png"
-iconset_build_script="${repo_root}/scripts/build-apple-iconset.sh"
-cursor_reference_source="${repo_root}/docs/references/codex-computer-use-reverse-engineering/assets/extracted-2026-04-19/official-software-cursor-window-252.png"
+bundle_short_version="${OPEN_COMPUTER_USE_RELEASE_VERSION:-$package_version}"
+release_app_bundle_name="Overseer Computer Use.app"
+development_app_bundle_name="Overseer Computer Use (Dev).app"
+bundle_icon_name="OverseerComputerUse.icns"
+icon_renderer="${repo_root}/scripts/render-open-computer-use-icon.swift"
 
-bundle_display_name="OverSeer Computer Use"
-bundle_identifier="com.ifuryst.opencomputeruse"
+bundle_display_name="Overseer Computer Use"
+bundle_identifier="com.libertydesignstudio.overseer-computer-use"
 app_variant="release"
 app_bundle_name="${release_app_bundle_name}"
 
 if [[ "${configuration}" != "release" ]]; then
-  bundle_display_name="OverSeer Computer Use (Dev)"
-  bundle_identifier="com.ifuryst.opencomputeruse.dev"
+  bundle_display_name="Overseer Computer Use (Dev)"
+  bundle_identifier="com.libertydesignstudio.overseer-computer-use.dev"
   app_variant="dev"
   app_bundle_name="${development_app_bundle_name}"
 fi
@@ -301,12 +339,11 @@ fi
 app_root="${repo_root}/dist/${app_bundle_name}"
 release_app_root="${repo_root}/dist/${release_app_bundle_name}"
 development_app_root="${repo_root}/dist/${development_app_bundle_name}"
-legacy_app_root="${repo_root}/dist/${legacy_app_bundle_name}"
 contents_dir="${app_root}/Contents"
 macos_dir="${contents_dir}/MacOS"
 resources_dir="${contents_dir}/Resources"
 
-rm -rf "${app_root}" "${legacy_app_root}"
+rm -rf "${app_root}"
 if [[ "${app_variant}" == "release" ]]; then
   rm -rf "${development_app_root}"
 else
@@ -333,33 +370,22 @@ esac
 
 chmod +x "${macos_dir}/OpenComputerUse"
 
-if [[ ! -f "${icon_master_png}" ]]; then
-  echo "Missing icon master PNG: ${icon_master_png}" >&2
+if [[ ! -f "${icon_renderer}" ]]; then
+  echo "Missing original Overseer icon renderer: ${icon_renderer}" >&2
   exit 1
 fi
 
-if [[ ! -f "${iconset_build_script}" ]]; then
-  echo "Missing iconset build script: ${iconset_build_script}" >&2
-  exit 1
-fi
-
-if [[ ! -f "${cursor_reference_source}" ]]; then
-  echo "Missing cursor reference PNG: ${cursor_reference_source}" >&2
-  exit 1
-fi
-
-icon_work_dir="$(mktemp -d "${TMPDIR:-/tmp}/open-computer-use-icon.XXXXXX")"
+icon_work_dir="$(mktemp -d "${TMPDIR:-/tmp}/overseer-computer-use-icon.XXXXXX")"
 cleanup() {
   if [[ -n "${icon_work_dir:-}" ]]; then
     rm -rf "${icon_work_dir}"
   fi
 }
 trap cleanup EXIT
-iconset_dir="${icon_work_dir}/OpenComputerUse.iconset"
+iconset_dir="${icon_work_dir}/OverseerComputerUse.iconset"
 mkdir -p "${iconset_dir}"
-"${iconset_build_script}" "${icon_master_png}" "${iconset_dir}"
+swift "${icon_renderer}" "${iconset_dir}"
 iconutil -c icns "${iconset_dir}" -o "${resources_dir}/${bundle_icon_name}"
-cp "${cursor_reference_source}" "${resources_dir}/official-software-cursor-window-252.png"
 
 cat > "${contents_dir}/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -385,7 +411,7 @@ cat > "${contents_dir}/Info.plist" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>${package_version}</string>
+  <string>${bundle_short_version}</string>
   <key>CFBundleVersion</key>
   <string>${bundle_version}</string>
   <key>LSMinimumSystemVersion</key>
@@ -402,6 +428,7 @@ PLIST
 
 plutil -lint "${contents_dir}/Info.plist" >/dev/null
 codesign_app_bundle "${app_root}"
+verify_release_signing "${app_root}"
 notarize_app_bundle "${app_root}"
 install_app_bundle "${app_root}"
 

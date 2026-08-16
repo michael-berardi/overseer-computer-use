@@ -12,7 +12,7 @@ public enum SystemPermissionKind: String, CaseIterable, Sendable {
         case .accessibility:
             return "Accessibility"
         case .screenRecording:
-            return "Screenshots"
+            return "Screen Recording"
         }
     }
 
@@ -22,7 +22,7 @@ public enum SystemPermissionKind: String, CaseIterable, Sendable {
         case .accessibility:
             return "Allows \(appName) to access app interfaces"
         case .screenRecording:
-            return "\(appName) uses screenshots to know where to click"
+            return "\(appName) reads on-screen pixels only while a tool call is active"
         }
     }
 
@@ -41,7 +41,7 @@ public enum SystemPermissionKind: String, CaseIterable, Sendable {
         case .accessibility:
             return "Drag \(appName) above to allow Accessibility"
         case .screenRecording:
-            return "Drag \(appName) above to allow Screenshots"
+            return "Drag \(appName) above to allow Screen Recording"
         }
     }
 
@@ -108,17 +108,15 @@ public struct PermissionDiagnostics: Sendable {
 }
 
 public enum PermissionSupport {
-    public static let bundleDisplayName = "OverSeer Computer Use"
-    public static let bundleIdentifier = "com.ifuryst.opencomputeruse"
-    public static let developmentBundleDisplayName = "OverSeer Computer Use (Dev)"
-    public static let developmentBundleIdentifier = "com.ifuryst.opencomputeruse.dev"
-    private static let releaseAppBundleName = "Open Computer Use.app"
-    private static let developmentAppBundleName = "Open Computer Use (Dev).app"
-    private static let appVariantInfoKey = "OpenComputerUseAppVariant"
+    public static let bundleDisplayName = "Overseer Computer Use"
+    public static let bundleIdentifier = "com.libertydesignstudio.overseer-computer-use"
+    public static let developmentBundleDisplayName = "Overseer Computer Use (Dev)"
+    public static let developmentBundleIdentifier = "com.libertydesignstudio.overseer-computer-use.dev"
+    private static let releaseAppBundleName = "Overseer Computer Use.app"
+    private static let developmentAppBundleName = "Overseer Computer Use (Dev).app"
+    private static let appVariantInfoKey = "OverseerComputerUseAppVariant"
     private static let npmPackageNames = [
-        "open-computer-use",
-        "open-computer-use-mcp",
-        "open-codex-computer-use-mcp",
+        "overseer-computer-use",
     ]
 
     public static func currentBundleDisplayName(bundle: Bundle = .main) -> String {
@@ -268,13 +266,13 @@ public enum PermissionSupport {
         for prefix in homebrewPrefixes() {
             appendCandidate(prefix
                 .appendingPathComponent("Caskroom", isDirectory: true)
-                .appendingPathComponent("open-computer-use", isDirectory: true)
+                .appendingPathComponent("overseer-computer-use", isDirectory: true)
                 .appendingPathComponent(releaseAppBundleName, isDirectory: true)
             )
 
             let caskroomRoot = prefix
                 .appendingPathComponent("Caskroom", isDirectory: true)
-                .appendingPathComponent("open-computer-use", isDirectory: true)
+                .appendingPathComponent("overseer-computer-use", isDirectory: true)
             if let versionDirectories = try? fileManager.contentsOfDirectory(at: caskroomRoot, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
                 for versionDirectory in versionDirectories {
                     appendCandidate(versionDirectory.appendingPathComponent(releaseAppBundleName, isDirectory: true))
@@ -283,7 +281,7 @@ public enum PermissionSupport {
 
             let cellarRoot = prefix
                 .appendingPathComponent("Cellar", isDirectory: true)
-                .appendingPathComponent("open-computer-use", isDirectory: true)
+                .appendingPathComponent("overseer-computer-use", isDirectory: true)
             if let versionDirectories = try? fileManager.contentsOfDirectory(at: cellarRoot, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
                 for versionDirectory in versionDirectories {
                     appendCandidate(versionDirectory

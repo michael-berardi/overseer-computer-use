@@ -76,66 +76,30 @@ func writeIconPNG(named fileName: String, pixelSize: Int, to directoryURL: URL) 
 }
 
 func drawAppIcon(size: CGFloat) {
-    // Keep this geometry aligned with Branding.makeAppIconImage in the app target.
-    let canvasInset = size * (92.0 / 1024.0)
-    let rect = CGRect(origin: .zero, size: CGSize(width: size, height: size)).insetBy(
-        dx: canvasInset,
-        dy: canvasInset
-    )
-    let tile = NSBezierPath(roundedRect: rect, xRadius: rect.width * 0.22, yRadius: rect.height * 0.22)
+    // Original Overseer geometric mark: no gradients, glows, or third-party artwork.
+    let inset = size * 0.09
+    let tileRect = CGRect(origin: .zero, size: CGSize(width: size, height: size)).insetBy(dx: inset, dy: inset)
+    let tile = NSBezierPath(roundedRect: tileRect, xRadius: size * 0.20, yRadius: size * 0.20)
+    NSColor(calibratedWhite: 0.055, alpha: 1).setFill()
+    tile.fill()
+    NSColor(calibratedWhite: 0.23, alpha: 1).setStroke()
+    tile.lineWidth = max(1, size * 0.012)
+    tile.stroke()
 
-    let gradient = NSGradient(colors: [
-        NSColor(calibratedRed: 0.12, green: 0.67, blue: 0.99, alpha: 1),
-        NSColor(calibratedRed: 0.94, green: 0.74, blue: 0.93, alpha: 1),
-    ])!
-    gradient.draw(in: tile, angle: 20)
+    let center = CGPoint(x: size / 2, y: size / 2)
+    let radius = size * 0.285
+    let ring = NSBezierPath(ovalIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+    ring.lineWidth = max(1.5, size * 0.045)
+    NSColor(calibratedRed: 0.70, green: 0.56, blue: 1, alpha: 1).setStroke()
+    ring.stroke()
 
-    func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-        CGPoint(x: rect.minX + rect.width * x / 256, y: rect.minY + rect.height * (1 - y / 256))
-    }
-
-    func scale(_ value: CGFloat) -> CGFloat {
-        rect.width * value / 256
-    }
-
-    let arc = NSBezierPath()
-    arc.move(to: point(74, 156))
-    arc.curve(
-        to: point(182, 88),
-        controlPoint1: point(78, 112),
-        controlPoint2: point(136, 72)
-    )
-    arc.lineWidth = scale(12)
-    arc.lineCapStyle = .round
-    NSColor.white.withAlphaComponent(0.72).setStroke()
-    arc.stroke()
-
-    let pointerShadow = NSBezierPath()
-    pointerShadow.move(to: point(129, 102))
-    pointerShadow.line(to: point(129, 181))
-    pointerShadow.line(to: point(149, 162))
-    pointerShadow.line(to: point(161, 193))
-    pointerShadow.line(to: point(176, 186))
-    pointerShadow.line(to: point(164, 157))
-    pointerShadow.line(to: point(192, 152))
-    pointerShadow.close()
-    NSColor.white.withAlphaComponent(0.14).setFill()
-    pointerShadow.fill()
-
-    let pointer = NSBezierPath()
-    pointer.move(to: point(126, 98))
-    pointer.line(to: point(126, 177))
-    pointer.line(to: point(146, 158))
-    pointer.line(to: point(158, 189))
-    pointer.line(to: point(173, 182))
-    pointer.line(to: point(161, 153))
-    pointer.line(to: point(189, 148))
-    pointer.close()
-    pointer.lineWidth = scale(6)
-    pointer.lineJoinStyle = .round
-    pointer.lineCapStyle = .round
-    NSColor.white.withAlphaComponent(0.94).setFill()
-    pointer.fill()
-    NSColor.white.setStroke()
-    pointer.stroke()
+    let diamondRadius = size * 0.13
+    let diamond = NSBezierPath()
+    diamond.move(to: CGPoint(x: center.x, y: center.y + diamondRadius))
+    diamond.line(to: CGPoint(x: center.x + diamondRadius, y: center.y))
+    diamond.line(to: CGPoint(x: center.x, y: center.y - diamondRadius))
+    diamond.line(to: CGPoint(x: center.x - diamondRadius, y: center.y))
+    diamond.close()
+    NSColor(calibratedWhite: 0.95, alpha: 1).setFill()
+    diamond.fill()
 }

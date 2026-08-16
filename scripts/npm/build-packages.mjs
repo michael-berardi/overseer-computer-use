@@ -19,12 +19,11 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..", "..");
 const defaultOutDir = path.join(repoRoot, "dist", "npm");
-const appBundleName = "Open Computer Use.app";
+const appBundleName = "Overseer Computer Use.app";
 const appExecutableName = "OpenComputerUse";
 const metaPackageNames = [
-  "open-computer-use",
-  "open-computer-use-mcp",
-  "open-codex-computer-use-mcp",
+  "overseer-computer-use",
+  "overseer-computer-use-mcp",
 ];
 const runtimeTargets = [
   {
@@ -220,10 +219,12 @@ const path = require("node:path");
 const platformPackages = ${JSON.stringify(platformLaunchTable(), null, 2)};
 const packageRoot = path.resolve(__dirname, "..");
 const args = process.argv.slice(2);
+if (args[0] === "computer-use") {
+  args.shift();
+}
 const command = args[0] || "";
 const installCommands = new Map([
   ["install-claude-mcp", "install-claude-mcp.sh"],
-  ["install-clauce-mcp", "install-claude-mcp.sh"],
   ["install-gemini-mcp", "install-gemini-mcp.sh"],
   ["install-codex-mcp", "install-codex-mcp.sh"],
   ["install-opencode-mcp", "install-opencode-mcp.sh"],
@@ -231,12 +232,11 @@ const installCommands = new Map([
 ]);
 
 function printLauncherHelp() {
-  console.log(\`Open Computer Use
+  console.log(\`Overseer Computer Use
 
 Usage:
-  open-computer-use [command] [options]
-  ocu [command] [options]
-  open-computer-use
+  overseer computer-use [command] [options]
+  overseer [command] [options]
 
 Commands:
   mcp                  Start the stdio MCP server.
@@ -245,10 +245,10 @@ Commands:
   snapshot <app>       Print the current accessibility snapshot for an app.
   call <tool>          Call one tool, or run a JSON array of tool calls.
   turn-ended           Notify the running MCP process that the host turn ended.
-  install-claude-mcp   Install the MCP server into ~/.claude.json for this project.
+  install-claude-mcp   Install the MCP server into the Claude config.
   install-gemini-mcp   Install the MCP server into Gemini CLI config.
-  install-codex-mcp    Install the MCP server into ~/.codex/config.toml.
-  install-opencode-mcp Install the MCP server into ~/.config/opencode.
+  install-codex-mcp    Install the MCP server into the Codex config.
+  install-opencode-mcp Install the MCP server into the OpenCode config.
   install-codex-plugin Install this npm package into the local Codex plugin cache.
   help [command]       Show general or command-specific help.
   version              Print the CLI version.
@@ -258,8 +258,8 @@ Global options:
   -v, --version        Show version.
 
 Notes:
-  This npm package bundles native runtimes for supported platforms and selects the current os-arch at launch.
-  Use 'open-computer-use help <command>' for command-specific help.\`);
+  This package bundles native runtimes for supported platforms and selects the current os-arch at launch.
+  Use 'overseer computer-use help <command>' for command-specific help.\`);
 }
 
 function printInstallHelp(scriptName, usage) {
@@ -267,7 +267,7 @@ function printInstallHelp(scriptName, usage) {
   \${usage}
 
 This helper updates a local MCP or plugin config to run:
-  open-computer-use mcp
+  overseer computer-use mcp
 
 Script:
   \${scriptName}\`);
@@ -304,7 +304,7 @@ function spawnAndExit(executable, executableArgs) {
 
 function runInstallCommand(scriptName, scriptArgs) {
   if (process.platform === "win32") {
-    fail(\`\${command} currently requires a POSIX shell. Configure your MCP client with command "open-computer-use" and args ["mcp"] on Windows.\`);
+    fail(\`\${command} currently requires a POSIX shell. Configure your MCP client with command "overseer" and args ["computer-use", "mcp"] on Windows.\`);
   }
 
   const scriptPath = path.join(packageRoot, "scripts", scriptName);
@@ -328,7 +328,7 @@ function resolveNativeExecutable() {
     fail(\`Missing bundled native runtime for \${platformKey} at \${executablePath}.
 
 Reinstall with:
-  npm install -g open-computer-use\`);
+  npm install -g overseer-computer-use\`);
   }
 
   return executablePath;
@@ -340,27 +340,27 @@ if (command === "-h" || command === "--help" || (command === "help" && args.leng
 }
 
 if (command === "help" && args[1] === "install-codex-plugin") {
-  printInstallHelp("install-codex-plugin.sh", "open-computer-use install-codex-plugin");
+  printInstallHelp("install-codex-plugin.sh", "overseer computer-use install-codex-plugin");
   process.exit(0);
 }
 
 if (command === "help" && args[1] === "install-codex-mcp") {
-  printInstallHelp("install-codex-mcp.sh", "open-computer-use install-codex-mcp");
+  printInstallHelp("install-codex-mcp.sh", "overseer computer-use install-codex-mcp");
   process.exit(0);
 }
 
 if (command === "help" && args[1] === "install-gemini-mcp") {
-  printInstallHelp("install-gemini-mcp.sh", "open-computer-use install-gemini-mcp [--scope project|user]");
+  printInstallHelp("install-gemini-mcp.sh", "overseer computer-use install-gemini-mcp [--scope project|user]");
   process.exit(0);
 }
 
 if (command === "help" && args[1] === "install-opencode-mcp") {
-  printInstallHelp("install-opencode-mcp.sh", "open-computer-use install-opencode-mcp");
+  printInstallHelp("install-opencode-mcp.sh", "overseer computer-use install-opencode-mcp");
   process.exit(0);
 }
 
-if (command === "help" && (args[1] === "install-claude-mcp" || args[1] === "install-clauce-mcp")) {
-  printInstallHelp("install-claude-mcp.sh", "open-computer-use install-claude-mcp");
+if (command === "help" && args[1] === "install-claude-mcp") {
+  printInstallHelp("install-claude-mcp.sh", "overseer computer-use install-claude-mcp");
   process.exit(0);
 }
 
@@ -377,9 +377,9 @@ function renderPostinstall(packageName, version) {
   return `#!/usr/bin/env node
 const mcpConfig = ${JSON.stringify({
   mcpServers: {
-    "open-computer-use": {
-      command: "open-computer-use",
-      args: ["mcp"],
+    "overseer-computer-use": {
+      command: "overseer",
+      args: ["computer-use", "mcp"],
     },
   },
 }, null, 2)};
@@ -387,39 +387,30 @@ const lines = [
   "",
   "Installed ${packageName}@${version}.",
   "Package: https://www.npmjs.com/package/${packageName}",
-  "Commands: open-computer-use, ocu, open-computer-use-mcp, open-codex-computer-use-mcp",
-  "Native runtime will be selected from bundled artifacts for " + process.platform + "-" + process.arch + ".",
+  "Command: overseer computer-use",
+  "Native runtime selected for " + process.platform + "-" + process.arch + ".",
   "",
   "Next:",
-  "1. Run open-computer-use --version or ocu --version",
+  "1. Run overseer computer-use --version",
   "2. Add the MCP config below to your host client",
-  "3. On macOS, run open-computer-use doctor and grant Accessibility / Screen Recording if prompted",
+  "3. On macOS, run overseer computer-use doctor and grant Accessibility / Screen Recording if prompted",
   "",
   "MCP config:",
   JSON.stringify(mcpConfig, null, 2),
   "",
 ];
-for (const line of lines) {
-  console.log(line);
-}
+for (const line of lines) console.log(line);
 `;
 }
 
 function renderReadme(packageName, version) {
   return `# ${packageName}
 
-Cross-platform npm distribution for the open-source **Open Computer Use** MCP server.
+Cross-platform npm distribution for the open-source **Overseer Computer Use** MCP server.
 
-This package bundles native runtimes for these supported platforms and lets the Node launcher choose the current \`process.platform\` / \`process.arch\` pair:
+This package bundles native runtimes for:
 
 ${runtimeTargets.map((runtimeTarget) => `- \`${runtimeTarget.os}-${runtimeTarget.cpu}\``).join("\n")}
-
-Global command aliases:
-
-- \`open-computer-use\`
-- \`ocu\`
-- \`open-computer-use-mcp\`
-- \`open-codex-computer-use-mcp\`
 
 ## Install
 
@@ -427,18 +418,23 @@ Global command aliases:
 npm install -g ${packageName}
 \`\`\`
 
-The root launcher resolves the current \`process.platform\` / \`process.arch\` pair and runs the matching bundled native runtime.
+The launcher selects the current platform and accepts the generic command:
+
+\`\`\`bash
+overseer computer-use --version
+overseer computer-use mcp
+overseer computer-use doctor
+overseer computer-use call list_apps
+\`\`\`
 
 ## MCP config
-
-If your MCP client accepts a stdio-style \`mcpServers\` JSON config, this is the default setup:
 
 \`\`\`json
 {
   "mcpServers": {
-    "open-computer-use": {
-      "command": "open-computer-use",
-      "args": ["mcp"]
+    "overseer-computer-use": {
+      "command": "overseer",
+      "args": ["computer-use", "mcp"]
     }
   }
 }
@@ -446,37 +442,14 @@ If your MCP client accepts a stdio-style \`mcpServers\` JSON config, this is the
 
 Package page: https://www.npmjs.com/package/${packageName}
 
-## Use
-
-\`\`\`bash
-open-computer-use --version
-ocu --version
-open-computer-use --help
-open-computer-use mcp
-ocu mcp
-open-computer-use call list_apps
-
-# macOS permission check and onboarding
-open-computer-use doctor
-
-# Installer helpers for MCP-capable CLIs
-open-computer-use install-claude-mcp
-open-computer-use install-gemini-mcp
-open-computer-use install-gemini-mcp --scope user
-open-computer-use install-codex-mcp
-open-computer-use install-opencode-mcp
-open-computer-use install-codex-plugin
-\`\`\`
-
 ## Notes
 
 - Version: \`${version}\`
-- Supported npm platforms: \`darwin-arm64\`, \`darwin-x64\`, \`linux-arm64\`, \`linux-x64\`, \`win32-arm64\`, \`win32-x64\`
-- macOS still requires \`Accessibility\` and \`Screen Recording\` permissions.
-- Linux requires a signed-in desktop session with AT-SPI2 / D-Bus accessibility available for real app control.
-- Windows requires a signed-in desktop session for UI Automation access.
+- macOS requires Accessibility and Screen Recording permissions.
+- Linux and Windows require a signed-in desktop session with their native accessibility bridge.
+- The macOS release app is signed/notarized separately; npm is a convenience launcher for supported runtimes.
 
-Source repository: https://github.com/iFurySt/open-codex-computer-use
+Source repository: https://github.com/michael-berardi/overseer-computer-use
 `;
 }
 
@@ -497,15 +470,15 @@ function renderMetaPackageJson(packageName, version) {
   return {
     name: packageName,
     version,
-    description: "Cross-platform Computer Use MCP server launcher. After install, configure open-computer-use mcp.",
+    description: "Cross-platform Computer Use MCP server launcher. After install, configure overseer computer-use mcp.",
     license: "MIT",
-    homepage: "https://github.com/iFurySt/open-codex-computer-use",
+    homepage: "https://github.com/michael-berardi/overseer-computer-use",
     repository: {
       type: "git",
-      url: "git+https://github.com/iFurySt/open-codex-computer-use.git",
+      url: "git+https://github.com/michael-berardi/overseer-computer-use.git",
     },
     bugs: {
-      url: "https://github.com/iFurySt/open-codex-computer-use/issues",
+      url: "https://github.com/michael-berardi/overseer-computer-use/issues",
     },
     keywords: packageKeywords(),
     preferGlobal: true,
@@ -513,10 +486,8 @@ function renderMetaPackageJson(packageName, version) {
       access: "public",
     },
     bin: {
-      "open-computer-use": "bin/open-computer-use",
-      "ocu": "bin/ocu",
-      "open-computer-use-mcp": "bin/open-computer-use-mcp",
-      "open-codex-computer-use-mcp": "bin/open-codex-computer-use-mcp",
+      "overseer": "bin/overseer",
+      "overseer-computer-use": "bin/overseer-computer-use",
     },
     scripts: {
       postinstall: "node ./scripts/postinstall.mjs",
@@ -524,7 +495,7 @@ function renderMetaPackageJson(packageName, version) {
     files: [
       ".agents/plugins/marketplace.json",
       "bin/",
-      "dist/Open Computer Use.app/",
+      "dist/Overseer Computer Use.app/",
       "dist/linux/",
       "dist/windows/",
       "plugins/open-computer-use/.codex-plugin/",
@@ -613,10 +584,8 @@ function stageMetaPackage(packageName, version, outDir) {
   copyInstallerScripts(packageRoot);
 
   const launcher = renderLauncher();
-  writeExecutable(path.join(packageRoot, "bin", "open-computer-use"), launcher);
-  writeExecutable(path.join(packageRoot, "bin", "ocu"), launcher);
-  writeExecutable(path.join(packageRoot, "bin", "open-computer-use-mcp"), launcher);
-  writeExecutable(path.join(packageRoot, "bin", "open-codex-computer-use-mcp"), launcher);
+  writeExecutable(path.join(packageRoot, "bin", "overseer"), launcher);
+  writeExecutable(path.join(packageRoot, "bin", "overseer-computer-use"), launcher);
   writeFileSync(path.join(packageRoot, "scripts", "postinstall.mjs"), renderPostinstall(packageName, version), "utf-8");
   writeFileSync(path.join(packageRoot, "README.md"), renderReadme(packageName, version), "utf-8");
   writeFileSync(path.join(packageRoot, "package.json"), `${JSON.stringify(renderMetaPackageJson(packageName, version), null, 2)}\n`, "utf-8");
